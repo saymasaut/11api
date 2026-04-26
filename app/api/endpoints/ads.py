@@ -4,8 +4,8 @@ router = APIRouter()
 
 ADS_CONFIG = {
     "enabled": True,
-    "interstitialProvider": "adsterra",  # adsterra | unity
-    "rewardedProvider": "adsterra",      # adsterra | unity
+    "interstitialProvider": "unity",  # adsterra | unity
+    "rewardedProvider": "unity",      # adsterra | unity
     "unity": {
         "gameId": "6045785",
         "testMode": False,
