@@ -3,9 +3,9 @@ from fastapi import APIRouter
 router = APIRouter()
 
 ADS_CONFIG = {
-    "enabled": True,
-    "interstitialProvider": "unity",  # adsterra | unity
-    "rewardedProvider": "unity",      # adsterra | unity
+    "enabled": False,
+    "interstitialProvider": "adsterra",  # adsterra | unity
+    "rewardedProvider": "adsterra",      # adsterra | unity
     "unity": {
         "gameId": "6045785",
         "testMode": False,
