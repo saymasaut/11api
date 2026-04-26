@@ -3,7 +3,7 @@ from fastapi import APIRouter
 router = APIRouter()
 
 ADS_CONFIG = {
-    "enabled": False,
+    "enabled": True,
     "interstitialProvider": "adsterra",  # adsterra | unity
     "rewardedProvider": "adsterra",      # adsterra | unity
     "unity": {
