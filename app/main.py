@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import httpx
-from datetime import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.staticfiles import StaticFiles
@@ -24,7 +23,7 @@ from app.core import cache, cache_cleanup, pool, rate_limit_middleware, rate_lim
 from app.exception_handlers import not_found_handler, internal_error_handler, general_exception_handler
 
 # API Routers
-from app.api.endpoints import recommendations, hls, media, explore, thumbnails, sports
+from app.api.endpoints import hls, media, explore, thumbnails, sports, ads, notifications
 # We will define new standardized routers here or import them if we moved them.
 # For this refactor, we will define them inline or in a new api module. 
 # To keep it clean, I will implement the Router structure within main.py for now, 
@@ -106,7 +105,6 @@ api_v1_router = APIRouter(prefix="/api/v1")
 # --- Scraper / Resources Endpoints ---
 
 from pydantic import BaseModel, HttpUrl, field_validator, Field
-from typing import Any, Optional
 
 class ScrapeRequestV1(BaseModel):
     url: HttpUrl
@@ -360,41 +358,6 @@ async def get_categories(source: str) -> list[CategoryItem]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load categories: {str(e)}")
 
-# --- Global Search & Trending (Pro Features) ---
-from app.services.global_search import global_search as _global_search, global_trending
-
-@api_v1_router.get("/search/global", tags=["Search"])
-async def global_search_endpoint(
-    request: Request,
-    query: str = Query(..., description="Search keyword"),
-    sites: Optional[list[str]] = Query(None, description="Sites to search"),
-    limit_per_site: int = Query(10, ge=1, le=50),
-    max_sites: int = Query(30, ge=1, le=50)
-):
-    from app.config.settings import settings
-    api_base = settings.BASE_URL or str(request.base_url)
-    res = await _global_search(query, sites, limit_per_site, max_sites)
-    if "results" in res:
-        for item in res["results"]:
-            if "thumbnail_url" in item:
-                item["thumbnail_url"] = thumbnails.wrap_thumbnail_url(item["thumbnail_url"], api_base)
-    return res
-
-@api_v1_router.get("/trending/global", tags=["Trending"])
-async def global_trending_endpoint(
-    request: Request,
-    sites: Optional[list[str]] = Query(None),
-    limit_per_site: int = Query(10, ge=1, le=50)
-):
-    from app.config.settings import settings
-    api_base = settings.BASE_URL or str(request.base_url)
-    res = await global_trending(sites, limit_per_site)
-    if "results" in res:
-        for item in res["results"]:
-            if "thumbnail_url" in item:
-                item["thumbnail_url"] = thumbnails.wrap_thumbnail_url(item["thumbnail_url"], api_base)
-    return res
-
 # --- Video Streaming Info ---
 from app.services.video_streaming import get_video_info, get_stream_url
 
@@ -521,48 +484,12 @@ async def video_download_endpoint(request: Request, url: str = Query(..., descri
 
 # include routers
 api_v1_router.include_router(explore.router)
-api_v1_router.include_router(recommendations.router, prefix="/recommendations", tags=["AI Recommendations"])
 api_v1_router.include_router(hls.router, prefix="/hls", tags=["HLS Proxy"])
 api_v1_router.include_router(thumbnails.router, prefix="/thumbnails", tags=["Thumbnail Proxy"])
 api_v1_router.include_router(media.router)
 api_v1_router.include_router(sports.router)
-
-
-# --- Notifications ---
-from app.models.schemas import NotificationResponse, NotificationItem
-
-@api_v1_router.get(
-    "/notifications",
-    response_model=NotificationResponse,
-    response_model_exclude_none=True,
-    response_model_exclude_defaults=True,
-    tags=["Notifications"],
-)
-async def get_notifications():
-    """
-    Get app notifications and announcements.
-    In a real app, these would come from a database.
-    """
-    sample_notifications = [
-        NotificationItem(
-            id="1",
-            title="Welcome to AppHub",
-            message="Thank you for using our app! Stay tuned for more features.",
-            type="info",
-            created_at=datetime(2026, 3, 20)
-        ),
-        NotificationItem(
-            id="2",
-            title="AppHub 8.0 Update Released",
-            message="Check out the latest update with new features and improvements! Available on AppTeka/AppHub Store and Official Telegram channel",
-            type="update",
-            created_at=datetime(2026, 4, 23)
-        ),
-    ]
-    return NotificationResponse(
-        notifications=sample_notifications,
-        total=len(sample_notifications)
-    )
+api_v1_router.include_router(ads.router)
+api_v1_router.include_router(notifications.router)
 
 
 # --- AppHub Version ---
