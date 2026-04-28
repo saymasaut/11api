@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -252,6 +253,27 @@ def _is_probable_ad_iframe(src: str) -> bool:
     return any(x in s for x in ("googlesyndication", "doubleclick", "adservice", "vast", "trafficjunky"))
 
 
+def _decode_tubeserver_url(src: str) -> Optional[str]:
+    try:
+        parsed = urlparse(src)
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        token = (query.get("tubeserver") or "").strip()
+        if not token:
+            return None
+        # Support both URL-safe and standard base64; pad if needed.
+        normalized = token.replace("-", "+").replace("_", "/")
+        normalized += "=" * ((4 - (len(normalized) % 4)) % 4)
+        decoded = base64.b64decode(normalized).decode("utf-8", errors="ignore").strip()
+        media_url = _normalize_media_url(decoded)
+        if not media_url:
+            return None
+        if media_url.lower().endswith(".mp4") or ".mp4?" in media_url.lower():
+            return media_url
+        return None
+    except Exception:
+        return None
+
+
 def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
     streams: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -302,17 +324,20 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
 
     server_idx = 1
     for iframe in soup.select("iframe[src]"):
-        src = (iframe.get("src") or "").strip()
-        if not src:
+        iframe_src = _normalize_media_url(iframe.get("src") or "")
+        if not iframe_src:
             continue
-        if src.startswith("//"):
-            src = f"https:{src}"
-        elif src.startswith("/"):
-            src = urljoin("https://indianporn365.xyz/", src)
-        if not src.startswith("http") or src in seen or _is_probable_ad_iframe(src):
+
+        # Some players expose direct MP4 via base64 query param (tubeserver).
+        decoded_mp4 = _decode_tubeserver_url(iframe_src)
+        if decoded_mp4 and decoded_mp4 not in seen:
+            seen.add(decoded_mp4)
+            streams.append({"url": decoded_mp4, "quality": _quality_from_url(decoded_mp4), "format": "mp4"})
+
+        if iframe_src in seen or _is_probable_ad_iframe(iframe_src):
             continue
-        seen.add(src)
-        streams.append({"url": src, "quality": f"Server {server_idx}", "format": "embed"})
+        seen.add(iframe_src)
+        streams.append({"url": iframe_src, "quality": f"Server {server_idx}", "format": "embed"})
         server_idx += 1
 
     def _score(item: dict[str, str]) -> tuple[int, int]:
