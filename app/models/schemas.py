@@ -73,6 +73,7 @@ class ScrapeRequest(BaseModel):
             "blowjobs.pro",
             "blackporn24.com",
             "lesbianporn8.net",
+            "milfporn8.net",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v
@@ -139,6 +140,7 @@ class ListRequest(BaseModel):
             "blowjobs.pro",
             "blackporn24.com",
             "lesbianporn8.net",
+            "milfporn8.net",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v
