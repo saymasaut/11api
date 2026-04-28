@@ -67,6 +67,16 @@ def _clean_title(title: str | None) -> Optional[str]:
     return t or None
 
 
+def _clean_list_title(title: str | None) -> Optional[str]:
+    t = _clean_title(title)
+    if not t:
+        return None
+    # Remove common trailing card metadata accidentally captured in title text.
+    t = re.sub(r"\s+\d{1,2}:\d{2}(?::\d{2})?\s+\d{1,3}%\s+\d[\d\.\s]*[kKmMbB]?\s*$", "", t).strip()
+    t = re.sub(r"\s+\d{1,2}:\d{2}(?::\d{2})?\s*$", "", t).strip()
+    return t or None
+
+
 def _normalize_numberish(value: str | None) -> Optional[str]:
     if not value:
         return None
@@ -523,12 +533,21 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
         if not thumb:
             continue
 
-        title = a.get_text(" ", strip=True) or a.get("title") or (img.get("alt") if img else None)
-        title = _clean_title(title) or "Unknown Video"
+        title_el = container.select_one(".title") if container else None
+        duration_el = container.select_one(".duration") if container else None
+        views_el = container.select_one(".views") if container else None
+
+        title = (
+            (title_el.get_text(" ", strip=True) if title_el else None)
+            or a.get("title")
+            or (img.get("alt") if img else None)
+            or a.get_text(" ", strip=True)
+        )
+        title = _clean_list_title(title) or "Unknown Video"
 
         ctext = container.get_text(" ", strip=True) if container else ""
-        duration = _extract_duration(ctext)
-        views = _extract_views(ctext)
+        duration = _extract_duration(duration_el.get_text(" ", strip=True) if duration_el else ctext)
+        views = _extract_views(views_el.get_text(" ", strip=True) if views_el else ctext)
 
         seen.add(href)
         items.append(
