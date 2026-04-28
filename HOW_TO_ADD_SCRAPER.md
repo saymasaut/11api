@@ -874,3 +874,117 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=blackporn24"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://blackporn24.com/videos/4551/lustful-stepmom-uses-her-stepson-s-big-cock-for-pleasure/"
 ```
+
+## IndianPorn365 Implementation Notes
+
+[Indian Porn 365](https://indianporn365.xyz/) is a WordPress-style clip index with:
+
+- category routes from the top nav (for example: `bhabhi`, `leaked-amateur-porn`, `desi-sex-videos`, `tamil-porn`)
+- post cards on the home/category pages
+- numbered pagination (`1 2 ... Next`)
+- detail pages per post slug that may expose direct or embedded playable sources
+
+Use the existing `viralkand`, `bollywoodmaal`, and `hornysimp` scrapers as closest references.
+
+### Host aliases
+
+- `indianporn365.xyz`
+- `www.indianporn365.xyz`
+
+Example:
+
+```python
+def can_handle(host: str) -> bool:
+    h = (host or "").lower()
+    return h == "indianporn365.xyz" or h.endswith(".indianporn365.xyz")
+```
+
+### Listing and pagination (`list_videos`)
+
+Recommended list strategy:
+
+- Parse candidate item links from thumbnail/title anchors in the main post grid.
+- Keep only same-domain detail URLs and skip utility/legal links such as:
+  - `/contact-us`
+  - `/privacy-policy`
+  - `/cookie-policy`
+  - `/18-u-s-c-2257`
+- Prefer metadata in this order:
+  - title: anchor `title`, image `alt`, then visible anchor text
+  - thumbnail: `data-src`, `data-lazy-src`, `srcset` first URL, then `src`
+  - duration/views: parse nearby card text when present; keep optional if absent
+- Page 1 should use `base_url` unchanged.
+- For page > 1, follow site pager links first (WordPress often uses `/page/{n}/`). If no pager URL can be inferred, fallback to adding `?paged={page}`.
+
+Useful list base URLs:
+
+- `https://indianporn365.xyz/`
+- `https://indianporn365.xyz/bhabhi/`
+- `https://indianporn365.xyz/leaked-amateur-porn/`
+- `https://indianporn365.xyz/desi-sex-videos/`
+- `https://indianporn365.xyz/tamil-porn/`
+- `https://indianporn365.xyz/hd-porn/`
+
+### Metadata and streams (`scrape`)
+
+For detail pages:
+
+- Metadata fallback order:
+  1. `og:title`, `og:description`, `og:image`
+  2. `twitter:title`, `twitter:description`, `twitter:image`
+  3. JSON-LD `VideoObject` (`name`, `description`, `thumbnailUrl`, `duration`)
+  4. visible `h1` / `<title>` fallback
+- Stream extraction order:
+  - `<video src>` / `<video><source src>`
+  - inline script URLs ending in `.mp4` or `.m3u8`
+  - `iframe[src]` embeds as fallback
+- Unescape script URLs before returning (`\\/` -> `/`, `\\u0026` -> `&`).
+- Build `video.streams` entries as:
+  - direct media: `format="mp4"` / `format="hls"`
+  - embedded players: `format="embed"` with labels like `Server 1`, `Server 2`
+- Set `video.default` preference:
+  1. highest-quality direct MP4
+  2. HLS URL
+  3. first playable embed
+
+If the page only exposes third-party embeds, return embed streams instead of fabricated direct media links.
+
+### Categories (`get_categories`)
+
+Seed `categories.json` from the site's public nav/category pages and keep the same schema as other scraper folders so `/api/v1/categories?source=indianporn365` returns valid `CategoryItem` entries.
+
+### Registration checklist for IndianPorn365
+
+Besides creating `backend/app/scrapers/indianporn365/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=indianporn365`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - unsupported-host help text
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry
+
+If request URL validation still relies on explicit domain allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### IndianPorn365 verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://indianporn365.xyz/<video-post-slug>/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://indianporn365.xyz/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=indianporn365"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://indianporn365.xyz/<video-post-slug>/"
+```

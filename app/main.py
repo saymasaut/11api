@@ -32,7 +32,7 @@ from app.api.endpoints import hls, media, explore, thumbnails, sports, ads, noti
 from fastapi import APIRouter
 
 # Scrapers & Models
-from app.scrapers import masa49, xhamster, xnxx, xvideos, pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rule34video, haho, hanime, rouvideo, cg51, oppai, xmoviesforyou, tnaflix, hornysimp, pimpbunny, hentaiser, bollywoodmaal, viralkand, blowjobspro, blackporn24, lesbianporn8, milfporn8
+from app.scrapers import masa49, xhamster, xnxx, xvideos, pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rule34video, haho, hanime, rouvideo, cg51, oppai, xmoviesforyou, tnaflix, hornysimp, pimpbunny, hentaiser, bollywoodmaal, viralkand, blowjobspro, blackporn24, lesbianporn8, milfporn8, indianporn365
 from app.models.schemas import ScrapeResponse, VideoInfoResponse, ListItem, CategoryItem, ScrapeRequest, ListRequest
 
 logging.basicConfig(level=logging.INFO)
@@ -155,6 +155,7 @@ async def _scrape_dispatch(url: str, host: str) -> dict[str, object]:
     if blackporn24.can_handle(host): return await blackporn24.scrape(url)
     if lesbianporn8.can_handle(host): return await lesbianporn8.scrape(url)
     if milfporn8.can_handle(host): return await milfporn8.scrape(url)
+    if indianporn365.can_handle(host): return await indianporn365.scrape(url)
     raise HTTPException(status_code=400, detail="Unsupported host")
 
 async def _list_dispatch(base_url: str, host: str, page: int, limit: int) -> list[dict[str, object]]:
@@ -194,6 +195,7 @@ async def _list_dispatch(base_url: str, host: str, page: int, limit: int) -> lis
     if blackporn24.can_handle(host): return await blackporn24.list_videos(base_url=base_url, page=page, limit=limit)
     if lesbianporn8.can_handle(host): return await lesbianporn8.list_videos(base_url=base_url, page=page, limit=limit)
     if milfporn8.can_handle(host): return await milfporn8.list_videos(base_url=base_url, page=page, limit=limit)
+    if indianporn365.can_handle(host): return await indianporn365.list_videos(base_url=base_url, page=page, limit=limit)
     raise HTTPException(status_code=400, detail="Unsupported host")
 
 async def _crawl_dispatch(base_url: str, host: str, start_page: int, max_pages: int, per_page_limit: int, max_items: int) -> list[dict[str, object]]:
@@ -369,6 +371,7 @@ async def get_categories(source: str) -> list[CategoryItem]:
         if s == "blackporn24" or s == "blackporn": return [CategoryItem(**c) for c in blackporn24.get_categories()]
         if s == "lesbianporn8" or s == "lesbianporn": return [CategoryItem(**c) for c in lesbianporn8.get_categories()]
         if s == "milfporn8" or s == "milf8" or s == "milfporn": return [CategoryItem(**c) for c in milfporn8.get_categories()]
+        if s == "indianporn365" or s == "indianporn": return [CategoryItem(**c) for c in indianporn365.get_categories()]
         raise HTTPException(status_code=400, detail="Unknown source")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load categories: {str(e)}")
