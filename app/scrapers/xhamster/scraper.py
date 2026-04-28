@@ -384,27 +384,6 @@ def _extract_video_data(html: str) -> dict[str, Any]:
     """
     streams = []
     hls_url = None
-
-    def _normalize_stream_url(raw_url: Any) -> Optional[str]:
-        if raw_url is None:
-            return None
-        u = str(raw_url).strip()
-        if not u:
-            return None
-        u = u.replace("\\/", "/").replace("\\u0026", "&")
-
-        if u.startswith("//"):
-            u = f"https:{u}"
-        elif u.startswith("/"):
-            u = f"https://xhamster.com{u}"
-        elif not u.startswith("http"):
-            # Accept bare host/path forms like "cdn.example.com/path/file.mp4"
-            if re.match(r"^[a-z0-9][a-z0-9\.-]+\.[a-z]{2,}(/|$)", u, re.IGNORECASE):
-                u = f"https://{u}"
-            else:
-                return None
-
-        return u
     
     try:
         # Regex to find window.initials = { ... }
@@ -436,9 +415,9 @@ def _extract_video_data(html: str) -> dict[str, Any]:
                 if hls:
                      # hls can be string or object
                     if isinstance(hls, str):
-                         hls_url = _normalize_stream_url(hls)
+                         hls_url = hls
                     elif isinstance(hls, dict) and "url" in hls:
-                         hls_url = _normalize_stream_url(hls["url"])
+                         hls_url = hls["url"]
                     
                     # Add HLS to streams array with proper format label
                     if hls_url:
@@ -457,22 +436,14 @@ def _extract_video_data(html: str) -> dict[str, Any]:
                         # often just key=quality, value=url or list
                         url_to_add = None
                         if isinstance(items, str):
-                            url_to_add = _normalize_stream_url(items)
-                        elif isinstance(items, dict):
-                            url_to_add = _normalize_stream_url(
-                                items.get("url") or items.get("fallback") or items.get("link")
-                            )
+                            url_to_add = items
                         elif isinstance(items, list) and len(items) > 0:
                             # Usually list of dicts or strings
-                            for first in items:
-                                if isinstance(first, str):
-                                    url_to_add = _normalize_stream_url(first)
-                                elif isinstance(first, dict):
-                                    url_to_add = _normalize_stream_url(
-                                        first.get("url") or first.get("fallback") or first.get("link")
-                                    )
-                                if url_to_add:
-                                    break
+                            first = items[0]
+                            if isinstance(first, str):
+                                url_to_add = first
+                            elif isinstance(first, dict):
+                                url_to_add = first.get("url")
                                 
                         if url_to_add:
                             # Map quality names to simpler ones
@@ -493,12 +464,7 @@ def _extract_video_data(html: str) -> dict[str, Any]:
                 mp4_list = sources.get("h264") or sources.get("mp4")
                 if mp4_list and isinstance(mp4_list, list):
                      for item in mp4_list:
-                        if isinstance(item, dict):
-                             item_url = _normalize_stream_url(
-                                 item.get("url") or item.get("fallback") or item.get("link")
-                             )
-                             if not item_url:
-                                 continue
+                         if isinstance(item, dict) and "url" in item:
                              # Extract quality
                              raw_q = str(item.get("quality", "default") or "default")
                              q_label = raw_q
@@ -509,12 +475,12 @@ def _extract_video_data(html: str) -> dict[str, Any]:
                              elif "240" in raw_q: q_label = "240p"
                              
                              fmt = "mp4"
-                             if ".m3u8" in item_url:
+                             if ".m3u8" in str(item["url"]):
                                  fmt = "hls"
                              
                              streams.append({
                                 "quality": q_label,
-                                "url": item_url,
+                                "url": item["url"],
                                 "format": fmt
                              })
 
@@ -526,14 +492,13 @@ def _extract_video_data(html: str) -> dict[str, Any]:
     if not hls_url:
         m = re.search(r'["\'](https:[^"\']+\.m3u8[^"\']*)["\']', html)
         if m:
-            hls_url = _normalize_stream_url(m.group(1))
+            hls_url = m.group(1).replace("\\/", "/")
             # Add HLS to streams if extracted via fallback
-            if hls_url:
-                streams.append({
-                    "quality": "adaptive",
-                    "url": hls_url,
-                    "format": "hls"
-                })
+            streams.append({
+                "quality": "adaptive",
+                "url": hls_url,
+                "format": "hls"
+            })
         
     # Sort streams by quality (descending)
     def quality_score(s):
@@ -543,27 +508,23 @@ def _extract_video_data(html: str) -> dict[str, Any]:
         if "480" in q: return 480
         if "240" in q: return 240
         return 0
+        
+    # Filter streams to keep ONLY 'hls' format
+    streams = [s for s in streams if s.get("format") == "hls"]
 
-    
-    # Keep both HLS and MP4 so /api/v1/videos/download can expose MP4 links.
-    # Deduplicate streams based on URL + format to preserve both variants.
+    # Deduplicate streams based on URL
     unique_urls = set()
     unique_streams = []
     for s in streams:
-        key = (s.get("url"), s.get("format"))
-        if key not in unique_urls:
-            unique_urls.add(key)
+        if s["url"] not in unique_urls:
+            unique_urls.add(s["url"])
             unique_streams.append(s)
     streams = unique_streams
 
     streams.sort(key=quality_score, reverse=True)
     
     default_url = None
-    # Preserve stream endpoint behavior: prefer HLS as default when present.
-    hls_stream = next((s for s in streams if s.get("format") == "hls"), None)
-    if hls_stream:
-        default_url = hls_stream["url"]
-    elif streams:
+    if streams:
         default_url = streams[0]["url"]
     elif hls_url:
         default_url = hls_url
