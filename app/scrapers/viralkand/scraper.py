@@ -326,7 +326,7 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
     materialized.sort(key=_score, reverse=True)
 
     default_url = None
-    for fmt in ("mp4", "hls", "embed"):
+    for fmt in ("embed", "mp4", "hls"):
         match = next((s for s in materialized if s.get("format") == fmt), None)
         if match:
             default_url = match.get("url")

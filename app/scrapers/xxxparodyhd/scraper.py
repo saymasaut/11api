@@ -107,9 +107,16 @@ def parse_page(html: str, url: str) -> dict[str, Any]:
     video_url = None
     streams = []
     if embed_urls:
-        # Prioritize LuluStream as default if available
-        lulu_stream = next((e for e in embed_urls if "lulu" in e["url"].lower() or "lulu" in e.get("label", "").lower()), None)
-        video_url = lulu_stream["url"] if lulu_stream else embed_urls[0]["url"]
+        # Prioritize Streamtape as default if available
+        streamtape_stream = next(
+            (
+                e
+                for e in embed_urls
+                if "streamtape" in e["url"].lower() or "streamtape" in e.get("label", "").lower()
+            ),
+            None,
+        )
+        video_url = streamtape_stream["url"] if streamtape_stream else embed_urls[0]["url"]
         
         for idx, embed in enumerate(embed_urls):
             streams.append({
