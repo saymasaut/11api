@@ -144,8 +144,6 @@ def _normalize_video_href(href: str) -> Optional[str]:
 def _detect_media_format(url: str) -> Optional[str]:
     low = (url or "").lower()
     path = urlparse(url).path.lower() if url else ""
-    if "/get_file/" in low:
-        return "mp4"
     if path.endswith(".m3u8"):
         return "hls"
     if path.endswith(".mp4"):
@@ -153,6 +151,23 @@ def _detect_media_format(url: str) -> Optional[str]:
     if "/embed/" in low:
         return "embed"
     return None
+
+
+def _is_non_video_asset_url(url: str) -> bool:
+    low = (url or "").lower()
+    path = urlparse(url).path.lower() if url else ""
+    image_exts = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".svg")
+    if path.endswith(image_exts):
+        return True
+    blocked_markers = (
+        "/screenshots/",
+        "/thumb/",
+        "/thumbs/",
+        "/thumbnails/",
+        "/poster/",
+        "/preview.jpg",
+    )
+    return any(marker in low for marker in blocked_markers)
 
 
 def _extract_inline_urls(html: str) -> list[str]:
@@ -211,6 +226,8 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
             continue
         if _is_probable_ad_iframe(href):
             continue
+        if _is_non_video_asset_url(href):
+            continue
         fmt = _detect_media_format(href)
         if not fmt or href in seen:
             continue
@@ -226,6 +243,8 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
                 src = urljoin(page_url, src)
             if _is_probable_ad_iframe(src):
                 continue
+            if _is_non_video_asset_url(src):
+                continue
             fmt = _detect_media_format(src)
             if src.startswith("http") and src not in seen and fmt in ("mp4", "hls"):
                 seen.add(src)
@@ -240,6 +259,8 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
                 src = urljoin(page_url, src)
             if _is_probable_ad_iframe(src):
                 continue
+            if _is_non_video_asset_url(src):
+                continue
             fmt = _detect_media_format(src)
             if not src.startswith("http") or src in seen or fmt not in ("mp4", "hls"):
                 continue
@@ -250,6 +271,8 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
         if src in seen:
             continue
         if _is_probable_ad_iframe(src):
+            continue
+        if _is_non_video_asset_url(src):
             continue
         fmt = _detect_media_format(src)
         if fmt not in ("mp4", "hls", "embed"):
@@ -267,6 +290,8 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
         elif src.startswith("/"):
             src = urljoin(page_url, src)
         if not src.startswith("http") or src in seen or _is_probable_ad_iframe(src):
+            continue
+        if _is_non_video_asset_url(src):
             continue
         seen.add(src)
         streams.append({"url": src, "quality": f"Server {server_idx}", "format": "embed"})
