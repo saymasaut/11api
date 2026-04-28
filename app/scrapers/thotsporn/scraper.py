@@ -96,6 +96,14 @@ def _normalize_media_url(src: str, base: str = BASE_SITE) -> Optional[str]:
         u = urljoin(base, u)
     if not u.startswith("http"):
         return None
+    # Resolve known embed mirror host to canonical player host.
+    try:
+        p = urlparse(u)
+        host = (p.netloc or "").lower()
+        if "vidhidepre.com" in host:
+            u = urlunparse((p.scheme or "https", "callistanise.com", p.path, p.params, p.query, p.fragment))
+    except Exception:
+        pass
     return u
 
 
@@ -142,6 +150,8 @@ def _is_probable_ad_iframe(src: str) -> bool:
     s = (src or "").lower()
     if "callistanise.com/embed/" in s:
         return False
+    if "vidhidepre.com/embed/" in s:
+        return False
     blocked_markers = (
         "googlesyndication",
         "doubleclick",
@@ -171,6 +181,7 @@ def _is_probable_playable_embed(src: str) -> bool:
         marker in low
         for marker in (
             "callistanise.com/embed/",
+            "vidhidepre.com/embed/",
             "/embed/",
             "player",
             "stream",
@@ -182,6 +193,15 @@ def _is_probable_playable_embed(src: str) -> bool:
     )
 
 
+def _is_blocked_stream_url(url: str) -> bool:
+    low = (url or "").lower()
+    return (
+        "prog-public-ht.project1content.com" in low
+        or "/mediabook/" in low
+        or "mediabook_320p.mp4" in low
+    )
+
+
 def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
     streams: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -189,11 +209,15 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
     for video in soup.select("video"):
         src = _normalize_media_url(video.get("src") or "")
         if src and src not in seen:
+            if _is_blocked_stream_url(src):
+                continue
             seen.add(src)
             streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
         for source in video.select("source[src]"):
             src = _normalize_media_url(source.get("src") or "")
             if not src or src in seen:
+                continue
+            if _is_blocked_stream_url(src):
                 continue
             seen.add(src)
             streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
@@ -201,11 +225,15 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
     for src in _extract_inline_urls(html):
         if src in seen:
             continue
+        if _is_blocked_stream_url(src):
+            continue
         seen.add(src)
         streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
 
     for src in _extract_inline_media_candidates(html):
         if src in seen:
+            continue
+        if _is_blocked_stream_url(src):
             continue
         seen.add(src)
         streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
@@ -215,11 +243,14 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
     for pat in (
         r"""https?://callistanise\.com/stream/[^\s"'<>]+\.m3u8[^\s"'<>]*""",
         r"""https?://callistanise\.com/embed/[^\s"'<>/]+""",
+        r"""https?://vidhidepre\.com/embed/[^\s"'<>/]+""",
     ):
         for m in re.finditer(pat, unescaped, flags=re.IGNORECASE):
             raw = m.group(0).strip()
             stream_url = _normalize_media_url(raw)
             if not stream_url or stream_url in seen:
+                continue
+            if _is_blocked_stream_url(stream_url):
                 continue
             seen.add(stream_url)
             if "/embed/" in stream_url.lower():
