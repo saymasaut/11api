@@ -186,6 +186,8 @@ def _extract_inline_urls(html: str) -> list[str]:
 
 def _stream_quality_from_url(url: str) -> str:
     low = (url or "").lower()
+    if "zeenite.com/embed/" in low:
+        return "zeenite"
     q = re.search(r"([1-9]\d{2,3})p", low)
     if q:
         return f"{q.group(1)}p"
