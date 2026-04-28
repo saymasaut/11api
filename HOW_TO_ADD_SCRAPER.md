@@ -754,3 +754,123 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=blowjobspro"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://blowjobs.pro/videos/7209/18-year-old-teen-gives-deepthroat-pov-blowjob/"
 ```
+
+## BlackPorn24 Implementation Notes
+
+[BlackPorn24](https://blackporn24.com/) follows the same family of tube layout as Blowjobs.pro: canonical detail URLs under `/videos/{id}/{slug}/`, category pages under `/categories/{slug}/`, and sortable list tabs (Newest/Hottest/Most Viewed/Top Rated) exposed from the home page.
+
+### Fast implementation plan (same as Blowjobs.pro)
+
+BlackPorn24 can be implemented as a near-clone of the `blowjobspro` scraper:
+
+1. Copy `backend/app/scrapers/blowjobspro/` -> `backend/app/scrapers/blackporn24/`.
+2. Rename host checks and defaults:
+   - `blowjobs.pro` -> `blackporn24.com`
+   - `sourceId/source` -> `blackporn24`
+3. Keep the same core logic:
+   - card parsing (`.title`, `.duration`, `.views`)
+   - `get_file` -> signed CDN `remote_control.php` resolution
+   - ad iframe filtering and native `/embed/{id}` preference
+4. Replace `categories.json` with `blackporn24.com/categories` entries.
+5. Register in dispatch, streaming service, explore source list, and schema allowlists.
+
+Treat BlackPorn24 as the same scraper engine with site-specific configuration (host/base URLs/categories/favicons).
+
+### Host aliases
+
+- `blackporn24.com`
+- `www.blackporn24.com`
+
+Example:
+
+```python
+def can_handle(host: str) -> bool:
+    h = (host or "").lower()
+    return h == "blackporn24.com" or h.endswith(".blackporn24.com")
+```
+
+### Listing and pagination (`list_videos`)
+
+Recommended parser behavior:
+
+- Accept only canonical video links matching `/videos/{numeric_id}/{slug}/`.
+- Skip utility/auth/legal links (`/terms`, `/dmca`, `/2257`, login/signup pages).
+- Prefer card fields by class selectors when available:
+  - title from `.title`
+  - duration from `.duration`
+  - views/rating from `.views` and nearby text
+- Keep fallback extraction in case selectors shift:
+  - title: anchor text / `title` / image `alt`
+  - duration: `mm:ss` / `hh:mm:ss` regex
+  - views: compact counters (`919k`, `2.1m`)
+- Page 1 should use `base_url` unchanged.
+- For page > 1, follow the site pager format first (numeric page segment or query param); fallback to `?page={n}`.
+
+Useful list base URLs:
+
+- `https://blackporn24.com/`
+- `https://blackporn24.com/categories/<category-slug>/`
+- `https://blackporn24.com/models/<model-slug>/`
+- `https://blackporn24.com/search/<term>/` (if the route is active in live markup)
+
+### Metadata and streams (`scrape`)
+
+For video detail pages:
+
+- Metadata fallback order:
+  1. `og:title`, `og:description`, `og:image`
+  2. `twitter:title`, `twitter:description`, `twitter:image`
+  3. JSON-LD `VideoObject`
+  4. visible title/header fallback
+- Stream extraction order:
+  - direct download/player links (`.mp4`, `.m3u8`, `/get_file/...`)
+  - `<video src>` / `<video><source src>`
+  - inline scripts with escaped URLs
+  - site-native embed URL fallback (`/embed/{id}`)
+- If stream links use intermediate `/get_file/...` URLs, resolve redirects to signed CDN `remote_control.php` URLs before returning `video.default`/`video.streams`.
+- Filter obvious ad-network iframes (promo/banners) and keep only playable/embed entries.
+- Set default stream preference:
+  1. resolved direct MP4
+  2. HLS
+  3. site-native embed
+
+### Categories (`get_categories`)
+
+Start `categories.json` from `https://blackporn24.com/categories/` entries, preserving scraper folder schema so `/api/v1/categories?source=blackporn24` returns valid `CategoryItem` objects.
+
+### Registration checklist for BlackPorn24
+
+Besides creating `backend/app/scrapers/blackporn24/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=blackporn24`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - per-quality flat fields behavior (same pattern as blowjobspro/tnaflix)
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry
+
+If your branch still validates URL domains using explicit allowlists, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### BlackPorn24 verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://blackporn24.com/videos/4551/lustful-stepmom-uses-her-stepson-s-big-cock-for-pleasure/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://blackporn24.com/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=blackporn24"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://blackporn24.com/videos/4551/lustful-stepmom-uses-her-stepson-s-big-cock-for-pleasure/"
+```

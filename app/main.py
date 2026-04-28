@@ -32,7 +32,7 @@ from app.api.endpoints import hls, media, explore, thumbnails, sports, ads, noti
 from fastapi import APIRouter
 
 # Scrapers & Models
-from app.scrapers import masa49, xhamster, xnxx, xvideos, pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rule34video, haho, hanime, rouvideo, cg51, oppai, xmoviesforyou, tnaflix, hornysimp, pimpbunny, hentaiser, bollywoodmaal, viralkand, blowjobspro
+from app.scrapers import masa49, xhamster, xnxx, xvideos, pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rule34video, haho, hanime, rouvideo, cg51, oppai, xmoviesforyou, tnaflix, hornysimp, pimpbunny, hentaiser, bollywoodmaal, viralkand, blowjobspro, blackporn24
 from app.models.schemas import ScrapeResponse, VideoInfoResponse, ListItem, CategoryItem, ScrapeRequest, ListRequest
 
 logging.basicConfig(level=logging.INFO)
@@ -152,6 +152,7 @@ async def _scrape_dispatch(url: str, host: str) -> dict[str, object]:
     if bollywoodmaal.can_handle(host): return await bollywoodmaal.scrape(url)
     if viralkand.can_handle(host): return await viralkand.scrape(url)
     if blowjobspro.can_handle(host): return await blowjobspro.scrape(url)
+    if blackporn24.can_handle(host): return await blackporn24.scrape(url)
     raise HTTPException(status_code=400, detail="Unsupported host")
 
 async def _list_dispatch(base_url: str, host: str, page: int, limit: int) -> list[dict[str, object]]:
@@ -188,6 +189,7 @@ async def _list_dispatch(base_url: str, host: str, page: int, limit: int) -> lis
     if bollywoodmaal.can_handle(host): return await bollywoodmaal.list_videos(base_url=base_url, page=page, limit=limit)
     if viralkand.can_handle(host): return await viralkand.list_videos(base_url=base_url, page=page, limit=limit)
     if blowjobspro.can_handle(host): return await blowjobspro.list_videos(base_url=base_url, page=page, limit=limit)
+    if blackporn24.can_handle(host): return await blackporn24.list_videos(base_url=base_url, page=page, limit=limit)
     raise HTTPException(status_code=400, detail="Unsupported host")
 
 async def _crawl_dispatch(base_url: str, host: str, start_page: int, max_pages: int, per_page_limit: int, max_items: int) -> list[dict[str, object]]:
@@ -360,6 +362,7 @@ async def get_categories(source: str) -> list[CategoryItem]:
         if s == "bollywoodmaal": return [CategoryItem(**c) for c in bollywoodmaal.get_categories()]
         if s == "viralkand": return [CategoryItem(**c) for c in viralkand.get_categories()]
         if s == "blowjobspro" or s == "blowjobs": return [CategoryItem(**c) for c in blowjobspro.get_categories()]
+        if s == "blackporn24" or s == "blackporn": return [CategoryItem(**c) for c in blackporn24.get_categories()]
         raise HTTPException(status_code=400, detail="Unknown source")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load categories: {str(e)}")
