@@ -263,7 +263,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://viralkand.com/",
         nickname="Viralkand",
-        favicon="https://viralkand.com/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/viralkand.png",
         accentColor="#C2185B",
         category="porn",
         isVerified=False,
