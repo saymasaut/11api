@@ -651,6 +651,111 @@ curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://viralkand.com/<vide
 
 ## Blowjobs.pro Implementation Notes
 
+## DesiPorn.one Implementation Notes
+
+[DesiPorn.one](https://desiporn.one/) is a tube-style site with canonical detail pages under `/videos/{id}/{slug}/`. The home page exposes card listings and navigation for Latest, Top Rated, Most Viewed, Categories, and Search.
+
+### Host aliases
+
+- `desiporn.one`
+- `www.desiporn.one`
+
+Example:
+
+```python
+def can_handle(host: str) -> bool:
+    h = (host or "").lower()
+    return h == "desiporn.one" or h.endswith(".desiporn.one")
+```
+
+### Listing and pagination (`list_videos`)
+
+Recommended list strategy:
+
+- Parse card anchors that match `/videos/{numeric_id}/{slug}/`.
+- Keep only same-domain video URLs and skip utility pages such as `/terms`, `/2257`, and external DMCA links.
+- Prefer metadata in this order:
+  - title: anchor text, then `title`, then image `alt`
+  - thumbnail: `data-src`, `data-original`, first `srcset` candidate, then `src`
+  - duration: regex for `mm:ss` / `hh:mm:ss` from card text
+  - views/rating: parse compact counters and percentages when easy; keep optional
+- Page 1 should use `base_url` unchanged.
+- For page > 1, follow visible paginator routes first; fallback to `?page={n}` if no route is detected.
+
+Useful base URLs to support:
+
+- `https://desiporn.one/`
+- `https://desiporn.one/latest/` (or site's "Latest" route if different)
+- `https://desiporn.one/top-rated/`
+- `https://desiporn.one/most-viewed/`
+- `https://desiporn.one/categories/<category-slug>/`
+- `https://desiporn.one/search/<term>/` (or query search route used by live markup)
+
+### Metadata and streams (`scrape`)
+
+For detail pages:
+
+- Extract metadata from:
+  1. `og:title`, `og:description`, `og:image`
+  2. `twitter:title`, `twitter:description`, `twitter:image`
+  3. JSON-LD `VideoObject` if present (`name`, `description`, `thumbnailUrl`, `duration`)
+  4. visible title fallback
+- Scan for playable URLs in:
+  - `<video src>` / `<video><source src>`
+  - inline scripts exposing `.mp4` / `.m3u8`
+  - `iframe[src]` embeds (fallback)
+- Unescape script URLs before using them (`\\/` -> `/`, `\\u0026` -> `&`).
+- Build `video.streams` with:
+  - direct files: `format="mp4"` or `format="hls"`
+  - embeds: `format="embed"` with server labels (`Server 1`, `Server 2`, ...)
+- Set `video.default` preference:
+  1. highest-quality direct MP4
+  2. HLS URL
+  3. first playable embed URL
+
+If the page only exposes embedded players, return embed streams instead of fabricating direct media URLs.
+
+### Categories (`get_categories`)
+
+Seed `categories.json` from the site's public Categories index and keep schema aligned with existing scraper folders so `/api/v1/categories?source=desiporn` returns valid `CategoryItem` entries.
+
+### Registration checklist for DesiPorn.one
+
+Besides creating `backend/app/scrapers/desiporn/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=desiporn`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - unsupported-host help text
+  - host checks for stream/info passthrough if needed
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry
+
+If URL validation still uses strict allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### DesiPorn.one verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://desiporn.one/videos/22481/desi-sex-bahu-and-sasur-indian-porn-videos/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://desiporn.one/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=desiporn"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://desiporn.one/videos/22481/desi-sex-bahu-and-sasur-indian-porn-videos/"
+```
+
 [Blowjobs.pro](https://blowjobs.pro/) is a tube-style site with canonical video pages under `/videos/{id}/{slug}/`, sortable listing views (Newest/Hottest/Most Viewed/Top Rated), category pages, model pages, and search.
 
 ### Host aliases

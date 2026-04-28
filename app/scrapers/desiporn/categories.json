@@ -1,0 +1,6 @@
+[
+  { "id": "home", "name": "Home", "url": "https://desiporn.one/" },
+  { "id": "latest", "name": "Latest", "url": "https://desiporn.one/latest/" },
+  { "id": "top-rated", "name": "Top Rated", "url": "https://desiporn.one/top-rated/" },
+  { "id": "most-viewed", "name": "Most Viewed", "url": "https://desiporn.one/most-viewed/" }
+]
