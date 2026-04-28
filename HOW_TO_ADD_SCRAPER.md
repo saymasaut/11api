@@ -1223,3 +1223,119 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=kamababa"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://www.thekamababa.com/<video-post-slug>/"
 ```
+
+## DesiMMS2 Implementation Notes
+
+[DesiMMS2](https://www.desimms2.site/) is a WordPress-style clip index with:
+
+- sort tabs on listing pages (`Newest`, `Best`, `Most viewed`, `Longest`, `Random`)
+- category and tag archive routes
+- numbered pagination (`1 2 3 ... Next Last`)
+- detail pages exposing playable sources via native `<video>` tags, inline script URLs, or embedded players
+
+Use `kamababa`, `mmsbro`, and `indianporn365` as the closest implementation references.
+
+### Host aliases
+
+- `desimms2.site`
+- `www.desimms2.site`
+
+Example:
+
+```python
+def can_handle(host: str) -> bool:
+    h = (host or "").lower()
+    return h == "desimms2.site" or h.endswith(".desimms2.site")
+```
+
+### Listing and pagination (`list_videos`)
+
+Recommended list strategy:
+
+- Parse candidate detail-page links from card thumbnail/title anchors.
+- Keep only same-domain post URLs and skip utility links such as:
+  - `/report-content`
+  - `/18-u-s-c-2257`
+  - `/categories/`
+  - `/tags/`
+  - auth/login/reset-password/profile paths
+- Prefer metadata in this order:
+  - title: anchor `title`, image `alt`, then visible anchor text
+  - thumbnail: `data-src`, `data-lazy-src`, `srcset` first URL, then `src`
+  - duration/views/rating: parse nearby card text where available; keep optional if absent
+- Page 1 should use `base_url` unchanged.
+- For page > 1, follow explicit pager links first. If no pager URL is detected, fallback to WordPress patterns (`/page/{n}/`, then `?paged={n}`).
+- If `base_url` includes a search query (`?s=`), preserve query params and append `paged={n}`.
+
+Useful list base URLs:
+
+- `https://www.desimms2.site/`
+- `https://www.desimms2.site/categories/`
+- `https://www.desimms2.site/tags/`
+- `https://www.desimms2.site/?s=<query>`
+
+### Metadata and streams (`scrape`)
+
+For detail pages:
+
+- Metadata fallback order:
+  1. `og:title`, `og:description`, `og:image`
+  2. `twitter:title`, `twitter:description`, `twitter:image`
+  3. JSON-LD `VideoObject`
+  4. visible `h1` / page `<title>`
+- Stream extraction order:
+  - direct `<video src>` and `<video><source src>`
+  - inline script URLs matching `.mp4` or `.m3u8`
+  - iframe embeds as fallback
+- Unescape script URLs before use (`\\/` -> `/`, `\\u0026` -> `&`).
+- Build `video.streams` with:
+  - direct media: `format="mp4"` / `format="hls"`
+  - embeds: `format="embed"` with qualities like `Server 1`, `Server 2`, ...
+- Set `video.default` preference:
+  1. highest-priority direct MP4
+  2. HLS URL
+  3. first playable embed
+
+If a page exposes only embedded players, return embed streams instead of manufacturing direct media URLs.
+
+### Categories (`get_categories`)
+
+Seed `categories.json` from live category/tag pages and keep schema aligned with existing scraper folders so `/api/v1/categories?source=desimms2` returns valid `CategoryItem` entries.
+
+### Registration checklist for DesiMMS2
+
+Besides creating `backend/app/scrapers/desimms2/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=desimms2`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host/unsupported-host help text
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### DesiMMS2 verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://www.desimms2.site/<video-post-slug>/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://www.desimms2.site/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://www.desimms2.site/categories/&page=2&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=desimms2"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://www.desimms2.site/<video-post-slug>/"
+```

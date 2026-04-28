@@ -1,0 +1,11 @@
+[
+  { "id": "home", "name": "Home", "url": "https://www.desimms2.site/" },
+  { "id": "newest", "name": "Newest", "url": "https://www.desimms2.site/?filter=latest" },
+  { "id": "best", "name": "Best", "url": "https://www.desimms2.site/?filter=popular" },
+  { "id": "most-viewed", "name": "Most Viewed", "url": "https://www.desimms2.site/?filter=most-viewed" },
+  { "id": "longest", "name": "Longest", "url": "https://www.desimms2.site/?filter=longest" },
+  { "id": "random", "name": "Random", "url": "https://www.desimms2.site/?filter=random" },
+  { "id": "desi-mms", "name": "Desi MMS", "url": "https://www.desimms2.site/category/desi-mms/" },
+  { "id": "desi-sex", "name": "Desi Sex", "url": "https://www.desimms2.site/category/desi-sex/" },
+  { "id": "bangladeshi", "name": "Bangladeshi", "url": "https://www.desimms2.site/category/bangladeshi-sex-video/" }
+]

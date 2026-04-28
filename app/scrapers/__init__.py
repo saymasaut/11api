@@ -50,5 +50,6 @@ from . import milfporn8
 from . import indianporn365
 from . import mmsbro
 from . import kamababa
+from . import desimms2
 
-__all__ = ['xnxx', 'xhamster', 'xvideos', 'masa49', 'pornhub', 'youporn', 'redtube', 'beeg', 'spankbang', 'fapnut', 'pornxp', 'hqporner', 'xxxparodyhd', 'pornwex', 'tube8', 'pornhat', 'brazzpw', 'gosexpod', 'watcherotic', 'rule34video', 'haho', 'hanime', 'rouvideo', 'cg51', 'oppai', 'xmoviesforyou', 'tnaflix', 'hornysimp', 'pimpbunny', 'hentaiser', 'bollywoodmaal', 'viralkand', 'blowjobspro', 'blackporn24', 'lesbianporn8', 'milfporn8', 'indianporn365', 'mmsbro', 'kamababa']
+__all__ = ['xnxx', 'xhamster', 'xvideos', 'masa49', 'pornhub', 'youporn', 'redtube', 'beeg', 'spankbang', 'fapnut', 'pornxp', 'hqporner', 'xxxparodyhd', 'pornwex', 'tube8', 'pornhat', 'brazzpw', 'gosexpod', 'watcherotic', 'rule34video', 'haho', 'hanime', 'rouvideo', 'cg51', 'oppai', 'xmoviesforyou', 'tnaflix', 'hornysimp', 'pimpbunny', 'hentaiser', 'bollywoodmaal', 'viralkand', 'blowjobspro', 'blackporn24', 'lesbianporn8', 'milfporn8', 'indianporn365', 'mmsbro', 'kamababa', 'desimms2']
