@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import base64
 from typing import Any, Optional
-from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
+from urllib.parse import parse_qs, parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
 
@@ -128,6 +129,22 @@ def _extract_inline_urls(html: str) -> list[str]:
     return list(dict.fromkeys(urls))
 
 
+def _decode_tubeserver_url(player_url: str) -> Optional[str]:
+    try:
+        parsed = urlparse(player_url)
+        tubeserver = parse_qs(parsed.query).get("tubeserver", [None])[0]
+        if not tubeserver:
+            return None
+        padded = tubeserver + "=" * (-len(tubeserver) % 4)
+        decoded = base64.b64decode(padded).decode("utf-8", errors="ignore").strip()
+        direct = _normalize_media_url(decoded)
+        if direct and re.search(r"\.(mp4|m3u8)(?:$|[?#])", direct, flags=re.IGNORECASE):
+            return direct
+    except Exception:
+        return None
+    return None
+
+
 def _is_probable_ad_iframe(src: str) -> bool:
     s = (src or "").lower()
     blocked_markers = (
@@ -177,6 +194,19 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
             continue
         if _is_probable_ad_iframe(iframe_src):
             continue
+
+        # KenPlayer wrappers often carry a base64-encoded direct media URL in tubeserver=.
+        direct_from_wrapper = _decode_tubeserver_url(iframe_src)
+        if direct_from_wrapper and direct_from_wrapper not in seen:
+            seen.add(direct_from_wrapper)
+            streams.append(
+                {
+                    "url": direct_from_wrapper,
+                    "quality": _quality_from_url(direct_from_wrapper),
+                    "format": "hls" if ".m3u8" in direct_from_wrapper.lower() else "mp4",
+                }
+            )
+
         seen.add(iframe_src)
         streams.append({"url": iframe_src, "quality": f"Server {server_idx}", "format": "embed"})
         server_idx += 1
