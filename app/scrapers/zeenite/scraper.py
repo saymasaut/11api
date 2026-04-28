@@ -188,9 +188,35 @@ def _is_probable_ad_iframe(src: str) -> bool:
     return any(marker in s for marker in blocked)
 
 
+def _extract_native_embed_url(html: str, video_url: str) -> Optional[str]:
+    # Prefer same-site embed endpoint when present in page scripts/markup.
+    m = re.search(r"https?://(?:www\.)?zeenite\.com/embed/\d+\b", html, flags=re.IGNORECASE)
+    if m:
+        return m.group(0).strip()
+
+    # Fallback: derive from canonical /videos/{id}/{slug}/ URL.
+    vm = re.search(r"/videos/(\d+)/", video_url)
+    if vm:
+        return f"https://zeenite.com/embed/{vm.group(1)}"
+    return None
+
+
 def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str, Any]:
     streams: list[dict[str, str]] = []
     seen: set[str] = set()
+
+    for a in soup.select("a[href]"):
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        if href.startswith("//"):
+            href = f"https:{href}"
+        elif href.startswith("/"):
+            href = urljoin(page_url, href)
+        fmt = _detect_media_format(href)
+        if href.startswith("http") and href not in seen and fmt:
+            seen.add(href)
+            streams.append({"url": href, "quality": _stream_quality_from_url(href), "format": fmt})
 
     for video in soup.select("video"):
         src = (video.get("src") or "").strip()
@@ -238,11 +264,17 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
         if not src.startswith("http") or src in seen or _is_probable_ad_iframe(src):
             continue
         seen.add(src)
-        streams.append({"url": src, "quality": f"Server {server_idx}", "format": "embed"})
+        streams.append({"url": src, "quality": "embed", "format": "embed"})
         server_idx += 1
+
+    native_embed = _extract_native_embed_url(html, page_url)
+    if native_embed and native_embed not in seen:
+        seen.add(native_embed)
+        streams.append({"url": native_embed, "quality": "zeenite", "format": "embed"})
 
     def _score(item: dict[str, str]) -> tuple[int, int]:
         fmt = (item.get("format") or "").lower()
+        stream_url = item.get("url") or ""
         qtxt = item.get("quality") or ""
         q = re.search(r"(\d{3,4})", qtxt)
         qnum = int(q.group(1)) if q else 0
@@ -250,6 +282,8 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
             return (3, qnum)
         if fmt == "hls":
             return (2, qnum)
+        if fmt == "embed" and "zeenite.com/embed/" in stream_url.lower():
+            return (1, 1)
         return (1, 0)
 
     uniq = list(dict.fromkeys((json.dumps(s, sort_keys=True) for s in streams)))
