@@ -95,7 +95,9 @@ def _extract_duration(text: str | None) -> Optional[str]:
 def _extract_views(text: str | None) -> Optional[str]:
     if not text:
         return None
-    m = re.search(r"\b(?:views?\s*[:\-]?\s*)?(\d[\d\s,\.]*\s*[KMBkmb]?)\b", text, flags=re.IGNORECASE)
+    m = re.search(r"\bviews?\s*[:\-]?\s*(\d[\d\s,\.]*\s*[KMBkmb]?)\b", text, flags=re.IGNORECASE)
+    if not m:
+        m = re.search(r"\b(\d[\d\s,\.]*\s*[KMBkmb])\b", text, flags=re.IGNORECASE)
     if not m:
         return None
     return _normalize_numberish(m.group(1))
@@ -469,8 +471,10 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
         thumbnail = f"https:{thumbnail}"
 
     text_blob = soup.get_text(" ", strip=True)
+    views_el = soup.select_one(".views")
+    views_text = views_el.get_text(" ", strip=True) if views_el else None
     duration = _extract_duration(text_blob)
-    views = _extract_views(text_blob)
+    views = _extract_views(views_text) or _extract_views(text_blob)
 
     tags: list[str] = []
     for el in soup.select(".tags a, a[href*='/tags/']"):
@@ -557,7 +561,9 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
 
         ctext = container.get_text(" ", strip=True) if container else ""
         duration = _extract_duration(ctext)
-        views = _extract_views(ctext)
+        views_el = container.select_one(".views") if container else None
+        views_text = views_el.get_text(" ", strip=True) if views_el else None
+        views = _extract_views(views_text) or _extract_views(ctext)
 
         seen.add(href)
         items.append(
