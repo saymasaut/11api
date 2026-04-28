@@ -231,10 +231,6 @@ Besides creating `backend/app/scrapers/tnaflix/`, update all of these:
 - `backend/app/services/video_streaming.py`
   - scraper selection branch
   - unsupported-host help text (optional)
-- `backend/app/services/global_search.py`
-  - `available_scrapers`
-  - search URL pattern
-  - trending registry
 - `backend/app/api/endpoints/explore.py`
   - add `ExploreSourceResponse` for TNAFlix
 
@@ -292,10 +288,6 @@ Besides creating `backend/app/scrapers/hornysimp/`, update all of these:
 - `backend/app/services/video_streaming.py`
   - scraper selection branch
   - unsupported-host help text
-- `backend/app/services/global_search.py`
-  - `available_scrapers`
-  - search URL pattern (`https://hornysimp.com/?s={query}`)
-  - trending registry (use `https://hornysimp.com/`)
 - `backend/app/api/endpoints/explore.py`
   - add `ExploreSourceResponse` entry
 
@@ -361,10 +353,6 @@ Besides creating `backend/app/scrapers/pimpbunny/`, update all of these:
 - `backend/app/services/video_streaming.py`
   - scraper selection branch
   - flat `available_qualities` block (same pattern as `tnaflix.com`)
-- `backend/app/services/global_search.py`
-  - `available_scrapers`
-  - search URL pattern (`https://pimpbunny.com/search/{query_plus_encoded}/`)
-  - trending registry (`https://pimpbunny.com/videos/`)
 - `backend/app/api/endpoints/explore.py`
   - add `ExploreSourceResponse` entry (`baseUrl` should be list-friendly, e.g. `https://pimpbunny.com/videos/`)
 
@@ -453,10 +441,6 @@ Besides creating `backend/app/scrapers/hentaiser/`, update all of these:
 - `backend/app/services/video_streaming.py`
   - scraper selection branch
   - quality map (`source` or API-provided tiers)
-- `backend/app/services/global_search.py`
-  - `available_scrapers`
-  - search URL pattern (if Hentaiser API supports search, prefer API over HTML)
-  - trending registry (API-backed source)
 - `backend/app/api/endpoints/explore.py`
   - add `ExploreSourceResponse` entry
 
@@ -540,10 +524,6 @@ Besides creating `backend/app/scrapers/bollywoodmaal/`, update all of these:
 - `backend/app/services/video_streaming.py`
   - scraper selection branch
   - unsupported-host help text
-- `backend/app/services/global_search.py`
-  - `available_scrapers`
-  - search URL pattern (`https://bollywoodmaal.com/?s={query}`)
-  - trending registry (`https://bollywoodmaal.com/`)
 - `backend/app/api/endpoints/explore.py`
   - add `ExploreSourceResponse` entry
 
@@ -559,4 +539,112 @@ curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://bollywoodmaal.com/&pa
 curl "http://127.0.0.1:8000/api/v1/categories?source=bollywoodmaal"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://bollywoodmaal.com/<video-post-slug>/"
+```
+
+## Viralkand Implementation Notes
+
+[Viralkand](https://viralkand.com/) looks like a WordPress-style clip index with:
+
+- homepage/category grids of card links
+- numbered pagination
+- search support
+- post/detail pages that should be treated as the canonical video URLs
+
+Use the existing `bollywoodmaal`, `hornysimp`, and `masa49` scrapers as the closest starting references.
+
+### Host aliases
+
+- `viralkand.com`
+- `www.viralkand.com`
+
+Example:
+
+```python
+def can_handle(host: str) -> bool:
+    h = (host or "").lower()
+    return h == "viralkand.com" or h.endswith(".viralkand.com")
+```
+
+### Listing and pagination (`list_videos`)
+
+The public index exposes a paginated card grid plus category and search pages. Recommended approach:
+
+- Parse candidate video links from thumbnail/title anchors inside the main listing grid.
+- Keep only same-domain URLs and skip obvious utility pages such as:
+  - `/dmca-remove-a-video`
+  - `/18-u-s-c-2257`
+  - `/terms-of-use`
+  - tag/category index roots without a concrete video item
+- Prefer metadata in this order:
+  - title: anchor `title`, image `alt`, then visible text
+  - thumbnail: `data-src`, `data-lazy-src`, `data-original`, `srcset`, then `src`
+  - duration: regex for `mm:ss` / `hh:mm:ss`
+  - views/rating: parse nearby card text only if easy; keep them optional
+- Page 1 should use `base_url` unchanged.
+- For page > 1, first follow the site pager format if visible (`/page/{n}/` is the most likely WordPress pattern). If the supplied `base_url` already includes a category/tag path, preserve it and append the page segment there.
+- For search URLs, prefer WordPress query search (`https://viralkand.com/?s={query}`) unless live inspection shows a different route.
+
+### Metadata and streams (`scrape`)
+
+For detail pages:
+
+- Extract metadata from:
+  1. `og:title`, `og:description`, `og:image`
+  2. `twitter:title`, `twitter:description`, `twitter:image`
+  3. JSON-LD `VideoObject` if present
+  4. visible `h1` / `<title>` fallback
+- Scan for playable sources in:
+  - `<video src>` / `<video><source src>`
+  - `iframe[src]` embeds
+  - inline scripts that expose `.mp4` or `.m3u8`
+- Unescape inline-script URLs before using them (`\\/` -> `/`, `\\u0026` -> `&`).
+- Build `video.streams` using:
+  - direct files: `format="mp4"` or `format="hls"`
+  - embeds: `format="embed"` and qualities like `Server 1`, `Server 2`
+- Set `video.default` with this preference:
+  1. highest-quality direct MP4
+  2. HLS URL
+  3. first playable embed
+
+If the site only exposes third-party embeds on the post page, follow the same fallback pattern used by `hornysimp` / `xxxparodyhd`: return embed streams instead of forcing nonexistent direct media URLs.
+
+### Categories (`get_categories`)
+
+Start with a static `categories.json` copied from the public category list the scraper will support. Keep the schema aligned with the other scraper folders so `/api/v1/categories?source=viralkand` returns valid `CategoryItem` entries.
+
+### Registration checklist for Viralkand
+
+Besides creating `backend/app/scrapers/viralkand/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=viralkand`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - unsupported-host help text
+  - host checks for stream/info passthrough if needed
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry
+
+If request validation is still backed by explicit domain allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### Viralkand verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://viralkand.com/<video-post-slug>/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://viralkand.com/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=viralkand"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://viralkand.com/<video-post-slug>/"
 ```

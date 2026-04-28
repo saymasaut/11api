@@ -68,7 +68,8 @@ class ScrapeRequest(BaseModel):
             "youporn.com",
             "redtube.com",
             "beeg.com",
-            "spankbang.com"
+            "spankbang.com",
+            "viralkand.com",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v
@@ -130,7 +131,8 @@ class ListRequest(BaseModel):
             "youporn.com",
             "redtube.com",
             "beeg.com",
-            "spankbang.com"
+            "spankbang.com",
+            "viralkand.com",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v
