@@ -988,3 +988,119 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=indianporn365"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://indianporn365.xyz/<video-post-slug>/"
 ```
+
+## MMSBro Implementation Notes
+
+[MMSBro](https://mmsbro.com/) is a WordPress-style clip index with:
+
+- homepage card grid linking to post slugs (`https://mmsbro.com/<post-slug>/`)
+- category archives (`/category/<slug>/`)
+- numbered pagination via path segments (`/page/{n}/`)
+- detail pages that may expose direct media in `<video>` tags, `<source>` tags, inline script URLs, or embedded players
+
+Use `indianporn365`, `viralkand`, and `bollywoodmaal` as closest implementation references.
+
+### Host aliases
+
+- `mmsbro.com`
+- `www.mmsbro.com`
+
+Example:
+
+```python
+def can_handle(host: str) -> bool:
+    h = (host or "").lower()
+    return h == "mmsbro.com" or h.endswith(".mmsbro.com")
+```
+
+### Listing and pagination (`list_videos`)
+
+Recommended list strategy:
+
+- Parse candidate item links from anchor cards on homepage/category pages.
+- Keep only same-domain post URLs and skip utility routes such as:
+  - `/contact`
+  - `/privacy-policy`
+  - `/cookie-policy`
+  - `/18-u-s-c-2257`
+  - feed/tag/author pages
+- Prefer metadata in this order:
+  - title: anchor text / `title`
+  - thumbnail: card image `data-src`, `data-lazy-src`, `srcset`, then `src`
+  - duration: parse `mm:ss` / `hh:mm:ss` near the card title
+  - views/uploader: optional (extract if available, else keep `None`)
+- Page 1 should use `base_url` unchanged.
+- For page > 1, first follow path pagination (`/page/{n}/`). If search query style is used (`?s=query`), add `paged={n}` as query fallback.
+
+Useful list base URLs:
+
+- `https://mmsbro.com/`
+- `https://mmsbro.com/page/2/`
+- `https://mmsbro.com/category/desi-mms/`
+
+### Metadata and streams (`scrape`)
+
+For detail pages:
+
+- Metadata fallback order:
+  1. `og:title`, `og:description`, `og:image`
+  2. `twitter:title`, `twitter:description`, `twitter:image`
+  3. JSON-LD `VideoObject`
+  4. visible `h1` / page `<title>`
+- Stream extraction order:
+  - direct `<video src>` and `<video><source src>`
+  - inline script URLs matching `.mp4` or `.m3u8`
+  - iframe embeds as fallback
+- Unescape script URLs before use (`\\/` -> `/`, `\\u0026` -> `&`).
+- Build `video.streams` with:
+  - direct media: `format="mp4"` / `format="hls"`
+  - embeds: `format="embed"` with `quality` labels (`Server 1`, `Server 2`, ...)
+- Set `video.default` preference:
+  1. highest-priority direct MP4
+  2. HLS URL
+  3. first playable embed
+
+If a page exposes only embedded players, return embed streams instead of manufacturing direct media URLs.
+
+### Categories (`get_categories`)
+
+Seed `categories.json` from live nav/category archives (for example `/category/desi-mms/`) and keep schema aligned with existing scraper folders so `/api/v1/categories?source=mmsbro` returns valid `CategoryItem` entries.
+
+### Registration checklist for MMSBro
+
+Besides creating `backend/app/scrapers/mmsbro/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=mmsbro`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host error text
+  - per-quality response block where applicable
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry
+
+If request URL validation still uses explicit domain allowlists, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### MMSBro verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://mmsbro.com/<video-post-slug>/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://mmsbro.com/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://mmsbro.com/category/desi-mms/&page=2&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=mmsbro"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://mmsbro.com/<video-post-slug>/"
+```
