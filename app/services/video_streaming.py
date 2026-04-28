@@ -124,58 +124,6 @@ async def get_video_info(url: str, api_base_url: str = "http://localhost:8000") 
             detail="No video streams found for this URL. Video may be premium or removed."
         )
     
-    # Post-process streams to wrap with proxy if needed (Beeg, etc.)
-    # This logic mirrors get_stream_url's proxy wrapping but for the entire list
-    if video_data.get("has_video") and video_data.get("streams"):
-        from urllib.parse import quote
-        
-        # Helper to wrap URL
-        def proxy_wrap(stream_url):
-            should_proxy = False
-            referer = ""
-            
-            if "externulls.com" in stream_url or "beeg.com" in stream_url:
-                if ".m3u8" in stream_url or "media=hls" in stream_url:
-                    should_proxy = True
-                    referer = "https://beeg.com/"
-            
-            if "pornxp.com" in stream_url or "porn-xp.com" in stream_url:
-                should_proxy = True
-                referer = "https://pornxp.io/"
-            
-            if "brazzpw.com" in stream_url:
-                should_proxy = True
-                referer = "https://brazzpw.com/"
-                
-            # Gosexpod CDN hotlink protection (e2c.gosexpod.com, e3c.gosexpod.com, etc.)
-            if "gosexpod.com" in stream_url and stream_url != url:
-                should_proxy = True
-                referer = "https://www.gosexpod.com/"
-
-            if should_proxy:
-                encoded_url = quote(stream_url)
-                encoded_referer = quote(referer)
-                # Ensure api_base_url is valid and stripped of trailing slashes
-                base = str(api_base_url).rstrip("/") if api_base_url else "http://localhost:8000"
-                
-                proxy_url = f"{base}/api/v1/hls/proxy?url={encoded_url}&referer={encoded_referer}"
-                # RedTube user_agent logic removed
-                    
-                return proxy_url
-            return stream_url
-
-        # Wrap extracted streams
-        for stream in video_data["streams"]:
-            stream["url"] = proxy_wrap(stream["url"])
-            
-        # Wrap default stream
-        if video_data.get("default"):
-            video_data["default"] = proxy_wrap(video_data["default"])
-            
-        # Wrap HLS stream specifically if present as key
-        if video_data.get("hls"):
-            video_data["hls"] = proxy_wrap(video_data["hls"])
-
     # Build response with consistent field order
     # For SpankBang, exclude metadata fields as they're not reliably extracted
     if scraper_module == spankbang:
@@ -283,39 +231,6 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
         if selected_quality == "default":
             selected_quality = "adaptive"
 
-    should_proxy = False
-    referer = ""
-            
-    # PROXY WRAPPER FOR BEEG and RedTube
-    if "externulls.com" in stream_url or "beeg.com" in stream_url:
-         should_proxy = True
-         referer = "https://beeg.com/"
-         
-    # Also proxy MP4s from PornXP
-    if "pornxp.com" in stream_url or "porn-xp.com" in stream_url:
-         should_proxy = True
-         referer = "https://pornxp.io/"
-         
-    if "brazzpw.com" in stream_url:
-         should_proxy = True
-         referer = "https://brazzpw.com/"
-
-    if should_proxy:
-            from urllib.parse import quote
-            # Construct proxy URL
-            # api_base_url comes from get_video_info caller
-            # We need to ensure we have a valid api_base_url
-            if not api_base_url:
-                api_base_url = "http://localhost:8000" # fallback
-            base = str(api_base_url).rstrip("/")
-                
-            # Prevent double wrapping
-            if "/api/v1/hls/proxy" not in stream_url:
-                encoded_url = quote(stream_url)
-                encoded_referer = quote(referer)
-                stream_url = f"{base}/api/v1/hls/proxy?url={encoded_url}&referer={encoded_referer}"
-                # RedTube user_agent logic removed
-    
     # Build base response
     response = {
         "stream_url": stream_url,
