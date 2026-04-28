@@ -335,6 +335,31 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
         streams.append({"url": iframe_src, "quality": f"Server {server_idx}", "format": "embed"})
         server_idx += 1
 
+    # Some pages expose embed links without rendering iframe in HTML.
+    for tag in soup.select("meta[itemprop='embedURL'][content]"):
+        embed_url = _normalize_media_url(tag.get("content") or "")
+        if not embed_url or embed_url in seen:
+            continue
+        seen.add(embed_url)
+        streams.append({"url": embed_url, "quality": f"Server {server_idx}", "format": "embed"})
+        server_idx += 1
+
+    for m in re.finditer(r"iframeSrc\s*=\s*['\"]([^'\"]+)['\"]", html, flags=re.IGNORECASE):
+        embed_url = _normalize_media_url(m.group(1))
+        if not embed_url or embed_url in seen:
+            continue
+        seen.add(embed_url)
+        streams.append({"url": embed_url, "quality": f"Server {server_idx}", "format": "embed"})
+        server_idx += 1
+
+    for btn in soup.select("#server-buttons [data-src], .server-btn[data-src]"):
+        embed_url = _normalize_media_url(btn.get("data-src") or "")
+        if not embed_url or embed_url in seen:
+            continue
+        seen.add(embed_url)
+        streams.append({"url": embed_url, "quality": f"Server {server_idx}", "format": "embed"})
+        server_idx += 1
+
     def _score(item: dict[str, str]) -> tuple[int, int]:
         fmt = (item.get("format") or "").lower()
         q = item.get("quality") or ""
