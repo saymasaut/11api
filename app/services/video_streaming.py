@@ -24,7 +24,7 @@ async def get_video_info(url: str, api_base_url: str = "http://localhost:8000") 
         }
     """
     # Import here to avoid circular dependency
-    from app.scrapers import xnxx, xhamster, xvideos, masa49, pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rule34video, haho, hanime, rouvideo, cg51, oppai, xmoviesforyou, tnaflix, hornysimp, pimpbunny, hentaiser, bollywoodmaal, viralkand, blowjobspro, blackporn24, lesbianporn8, milfporn8, indianporn365, mmsbro
+    from app.scrapers import xnxx, xhamster, xvideos, masa49, pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rule34video, haho, hanime, rouvideo, cg51, oppai, xmoviesforyou, tnaflix, hornysimp, pimpbunny, hentaiser, bollywoodmaal, viralkand, blowjobspro, blackporn24, lesbianporn8, milfporn8, indianporn365, mmsbro, kamababa
     from app.api.endpoints import thumbnails
     from urllib.parse import urlparse
     
@@ -112,10 +112,12 @@ async def get_video_info(url: str, api_base_url: str = "http://localhost:8000") 
         scraper_module = indianporn365
     elif mmsbro.can_handle(host):
         scraper_module = mmsbro
+    elif kamababa.can_handle(host):
+        scraper_module = kamababa
     else:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported host: {host}. Supported: xnxx, xhamster, xvideos, masa49 (.org/.com/.cam), pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, urshort.live (embed), pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rou.video, 51cg/chigua, oppai.stream, xmoviesforyou.com, tnaflix.com, hornysimp.com, pimpbunny.com, hentaiser.app, bollywoodmaal.com, viralkand.com, blowjobs.pro, blackporn24.com, lesbianporn8.net, milfporn8.net, indianporn365.xyz, mmsbro.com"
+            detail=f"Unsupported host: {host}. Supported: xnxx, xhamster, xvideos, masa49 (.org/.com/.cam), pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, urshort.live (embed), pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rou.video, 51cg/chigua, oppai.stream, xmoviesforyou.com, tnaflix.com, hornysimp.com, pimpbunny.com, hentaiser.app, bollywoodmaal.com, viralkand.com, blowjobs.pro, blackporn24.com, lesbianporn8.net, milfporn8.net, indianporn365.xyz, mmsbro.com, thekamababa.com"
         )
     
     try:
@@ -275,7 +277,8 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
         "lesbianporn8.net" in parsed_url.netloc.lower() or
         "milfporn8.net" in parsed_url.netloc.lower() or
         "indianporn365.xyz" in parsed_url.netloc.lower() or
-        "mmsbro.com" in parsed_url.netloc.lower()):
+        "mmsbro.com" in parsed_url.netloc.lower() or
+        "thekamababa.com" in parsed_url.netloc.lower()):
         qualities: dict[str, Any] = {}
         all_streams = video_data.get("streams", [])
         host_l = parsed_url.netloc.lower()
@@ -292,6 +295,7 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
             or "milfporn8.net" in host_l
             or "indianporn365.xyz" in host_l
             or "mmsbro.com" in host_l
+            or "thekamababa.com" in host_l
         )
         
         # Debug logging for RedTube

@@ -1104,3 +1104,122 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=mmsbro"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://mmsbro.com/<video-post-slug>/"
 ```
+
+## KamaBaba Implementation Notes
+
+[KamaBaba](https://www.thekamababa.com/) is a WordPress-style clip index with:
+
+- sort tabs on listing pages (`Newest`, `Best`, `Most viewed`, `Longest`, `Random`)
+- category and tag archive routes
+- numbered pagination (`1 2 3 ... Next Last`)
+- detail pages that may expose playable sources through native `<video>` tags, inline script URLs, or embedded players
+
+Use `mmsbro`, `indianporn365`, and `viralkand` as the closest implementation references.
+
+### Host aliases
+
+- `thekamababa.com`
+- `www.thekamababa.com`
+
+Example:
+
+```python
+def can_handle(host: str) -> bool:
+    h = (host or "").lower()
+    return h == "thekamababa.com" or h.endswith(".thekamababa.com")
+```
+
+### Listing and pagination (`list_videos`)
+
+Recommended list strategy:
+
+- Parse candidate detail-page links from thumbnail/title anchors in the main listing grid.
+- Keep only same-domain post URLs and skip obvious utility links such as:
+  - `/contact-us`
+  - `/video-removal`
+  - `/privacy-policy`
+  - `/18-usc-2257`
+  - `/advertise`
+  - `/jobs`
+  - `/unblock-kmb`
+  - auth/profile/reset-password pages
+- Prefer metadata in this order:
+  - title: anchor `title`, image `alt`, then visible anchor text
+  - thumbnail: `data-src`, `data-lazy-src`, `srcset` first URL, then `src`
+  - duration/views/rating: parse nearby card text when present; keep optional when absent
+- Page 1 should use `base_url` unchanged.
+- For page > 1, follow explicit pager links first. If no pager URL is detected, fallback to WordPress patterns (`/page/{n}/`, then `?paged={n}`).
+- If `base_url` already contains a sort/search query, preserve existing query params when adding page params.
+
+Useful list base URLs:
+
+- `https://www.thekamababa.com/`
+- `https://www.thekamababa.com/categories/`
+- `https://www.thekamababa.com/tags/`
+- `https://www.thekamababa.com/?s=<query>`
+
+### Metadata and streams (`scrape`)
+
+For detail pages:
+
+- Metadata fallback order:
+  1. `og:title`, `og:description`, `og:image`
+  2. `twitter:title`, `twitter:description`, `twitter:image`
+  3. JSON-LD `VideoObject`
+  4. visible `h1` / page `<title>`
+- Stream extraction order:
+  - direct `<video src>` and `<video><source src>`
+  - inline script URLs matching `.mp4` or `.m3u8`
+  - iframe embeds as fallback
+- Unescape script URLs before use (`\\/` -> `/`, `\\u0026` -> `&`).
+- Build `video.streams` with:
+  - direct media: `format="mp4"` / `format="hls"`
+  - embeds: `format="embed"` with qualities like `Server 1`, `Server 2`, ...
+- Set `video.default` preference:
+  1. highest-priority direct MP4
+  2. HLS URL
+  3. first playable embed
+
+If a page exposes only embedded players, return embed streams instead of manufacturing direct media URLs.
+
+### Categories (`get_categories`)
+
+Seed `categories.json` from live category/tag pages and keep schema aligned with existing scraper folders so `/api/v1/categories?source=kamababa` returns valid `CategoryItem` entries.
+
+### Registration checklist for KamaBaba
+
+Besides creating `backend/app/scrapers/kamababa/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=kamababa`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host/unsupported-host help text
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### KamaBaba verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://www.thekamababa.com/<video-post-slug>/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://www.thekamababa.com/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://www.thekamababa.com/categories/&page=2&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=kamababa"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://www.thekamababa.com/<video-post-slug>/"
+```
