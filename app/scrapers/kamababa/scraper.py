@@ -268,7 +268,45 @@ def _normalize_media_url(src: str, base: str = "https://www.thekamababa.com/") -
 
 def _is_probable_ad_iframe(src: str) -> bool:
     s = (src or "").lower()
-    return any(x in s for x in ("googlesyndication", "doubleclick", "adservice", "vast", "trafficjunky"))
+    blocked_markers = (
+        "googlesyndication",
+        "doubleclick",
+        "adservice",
+        "trafficjunky",
+        "blazingserver.net",
+        "videobaba.xyz",
+        "dscgirls.live",
+        "xlviiirdr.com",
+        "/delivery/afr.php",
+        "/ox/",
+        "zoneid=",
+        "campaignid=",
+        "creativeid=",
+        "spot=",
+        "affid=",
+    )
+    return any(x in s for x in blocked_markers)
+
+
+def _is_probable_playable_embed(src: str) -> bool:
+    s = (src or "").strip()
+    if not s:
+        return False
+    low = s.lower()
+    if _is_probable_ad_iframe(low):
+        return False
+    return any(
+        marker in low
+        for marker in (
+            "/embed/",
+            "player",
+            "stream",
+            ".m3u8",
+            ".mp4",
+            "video",
+            "iframe",
+        )
+    )
 
 
 def _decode_tubeserver_url(src: str) -> Optional[str]:
@@ -348,7 +386,7 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
             seen.add(decoded_mp4)
             streams.append({"url": decoded_mp4, "quality": _quality_from_url(decoded_mp4), "format": "mp4"})
 
-        if iframe_src in seen or _is_probable_ad_iframe(iframe_src):
+        if iframe_src in seen or not _is_probable_playable_embed(iframe_src):
             continue
         seen.add(iframe_src)
         streams.append({"url": iframe_src, "quality": f"Server {server_idx}", "format": "embed"})
@@ -356,7 +394,7 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
 
     for tag in soup.select("meta[itemprop='embedURL'][content]"):
         embed_url = _normalize_media_url(tag.get("content") or "")
-        if not embed_url or embed_url in seen:
+        if not embed_url or embed_url in seen or not _is_probable_playable_embed(embed_url):
             continue
         seen.add(embed_url)
         streams.append({"url": embed_url, "quality": f"Server {server_idx}", "format": "embed"})
@@ -364,7 +402,7 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
 
     for m in re.finditer(r"iframeSrc\s*=\s*['\"]([^'\"]+)['\"]", html, flags=re.IGNORECASE):
         embed_url = _normalize_media_url(m.group(1))
-        if not embed_url or embed_url in seen:
+        if not embed_url or embed_url in seen or not _is_probable_playable_embed(embed_url):
             continue
         seen.add(embed_url)
         streams.append({"url": embed_url, "quality": f"Server {server_idx}", "format": "embed"})
