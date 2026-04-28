@@ -265,6 +265,26 @@ def _extract_inline_urls(html: str) -> list[str]:
     return list(dict.fromkeys(urls))
 
 
+def _slug_tokens_from_url(page_url: str) -> set[str]:
+    try:
+        parsed = urlparse(page_url)
+        slug = (parsed.path or "").strip("/").split("/", 1)[0]
+        if not slug:
+            return set()
+        return {t for t in re.split(r"[^a-z0-9]+", slug.lower()) if len(t) >= 3}
+    except Exception:
+        return set()
+
+
+def _candidate_url_score(stream_url: str, slug_tokens: set[str]) -> tuple[int, int]:
+    low = (stream_url or "").lower()
+    # Prefer site CDN media links first.
+    cdn_score = 2 if "cdn.desimms2.site" in low else 0
+    # Prefer filenames/paths that match the page slug tokens.
+    token_hits = sum(1 for t in slug_tokens if t in low)
+    return (cdn_score + min(token_hits, 3), token_hits)
+
+
 def _normalize_media_url(src: str, base: str = "https://www.desimms2.site/") -> Optional[str]:
     u = (src or "").strip()
     if not u:
@@ -341,7 +361,7 @@ def _decode_tubeserver_url(src: str) -> Optional[str]:
         return None
 
 
-def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
+def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str, Any]:
     streams: list[dict[str, str]] = []
     seen: set[str] = set()
 
@@ -433,6 +453,26 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
 
     streams = list(dict.fromkeys((json.dumps(s, sort_keys=True) for s in streams)))
     materialized = [json.loads(s) for s in streams]
+    slug_tokens = _slug_tokens_from_url(page_url)
+
+    # Remove obvious cross-video pollution when we can confidently match the page slug.
+    if slug_tokens:
+        mp4s = [s for s in materialized if s.get("format") == "mp4" and isinstance(s.get("url"), str)]
+        if mp4s:
+            scored = sorted(
+                ((s, _candidate_url_score(s["url"], slug_tokens)) for s in mp4s),
+                key=lambda x: x[1],
+                reverse=True,
+            )
+            best_score = scored[0][1]
+            if best_score[0] > 0:
+                keep_urls = {s["url"] for s, score in scored if score == best_score}
+                materialized = [
+                    s
+                    for s in materialized
+                    if s.get("format") != "mp4" or s.get("url") in keep_urls
+                ]
+
     materialized.sort(key=_score, reverse=True)
 
     default_url = None
@@ -525,7 +565,7 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
         views = _extract_views_text(text_blob)
 
     tags = list(dict.fromkeys([t for t in tags if t]))
-    video = _extract_streams(soup, html)
+    video = _extract_streams(soup, html, url)
 
     return {
         "url": url,
