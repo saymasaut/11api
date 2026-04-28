@@ -123,6 +123,62 @@ def _extract_inline_urls(html: str) -> list[str]:
     return list(dict.fromkeys(urls))
 
 
+def _extract_inline_media_candidates(html: str) -> list[str]:
+    unescaped = html.replace("\\/", "/").replace("\\u0026", "&")
+    out: list[str] = []
+    patterns = (
+        r"""(?:file|src)\s*[:=]\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""",
+        r"""["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""",
+    )
+    for pat in patterns:
+        for m in re.finditer(pat, unescaped, flags=re.IGNORECASE):
+            url = (m.group(1) if m.groups() else m.group(0)).strip()
+            if url.startswith(("http://", "https://")):
+                out.append(url)
+    return list(dict.fromkeys(out))
+
+
+def _is_probable_ad_iframe(src: str) -> bool:
+    s = (src or "").lower()
+    blocked_markers = (
+        "googlesyndication",
+        "doubleclick",
+        "adservice",
+        "trafficjunky",
+        "/delivery/afr.php",
+        "/ox/",
+        "zoneid=",
+        "campaignid=",
+        "creativeid=",
+        "spot=",
+        "affid=",
+        "popads",
+        "exoclick",
+    )
+    return any(x in s for x in blocked_markers)
+
+
+def _is_probable_playable_embed(src: str) -> bool:
+    s = (src or "").strip()
+    if not s:
+        return False
+    low = s.lower()
+    if _is_probable_ad_iframe(low):
+        return False
+    return any(
+        marker in low
+        for marker in (
+            "/embed/",
+            "player",
+            "stream",
+            ".m3u8",
+            ".mp4",
+            "video",
+            "iframe",
+        )
+    )
+
+
 def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
     streams: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -145,13 +201,41 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
         seen.add(src)
         streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
 
+    for src in _extract_inline_media_candidates(html):
+        if src in seen:
+            continue
+        seen.add(src)
+        streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
+
     server_idx = 1
     for iframe in soup.select("iframe[src]"):
         iframe_src = _normalize_media_url(iframe.get("src") or "")
         if not iframe_src or iframe_src in seen:
             continue
+        if not _is_probable_playable_embed(iframe_src):
+            continue
         seen.add(iframe_src)
         streams.append({"url": iframe_src, "quality": f"Server {server_idx}", "format": "embed"})
+        server_idx += 1
+
+    for tag in soup.select("meta[itemprop='embedURL'][content]"):
+        embed_url = _normalize_media_url(tag.get("content") or "")
+        if not embed_url or embed_url in seen:
+            continue
+        if not _is_probable_playable_embed(embed_url):
+            continue
+        seen.add(embed_url)
+        streams.append({"url": embed_url, "quality": f"Server {server_idx}", "format": "embed"})
+        server_idx += 1
+
+    for m in re.finditer(r"""iframe(?:Src)?\s*[:=]\s*['"]([^'"]+)['"]""", html, flags=re.IGNORECASE):
+        embed_url = _normalize_media_url(m.group(1))
+        if not embed_url or embed_url in seen:
+            continue
+        if not _is_probable_playable_embed(embed_url):
+            continue
+        seen.add(embed_url)
+        streams.append({"url": embed_url, "quality": f"Server {server_idx}", "format": "embed"})
         server_idx += 1
 
     def _score(item: dict[str, str]) -> tuple[int, int]:
