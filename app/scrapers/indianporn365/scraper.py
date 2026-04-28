@@ -234,6 +234,19 @@ def _extract_inline_urls(html: str) -> list[str]:
     return list(dict.fromkeys(urls))
 
 
+def _normalize_media_url(src: str, base: str = "https://indianporn365.xyz/") -> Optional[str]:
+    u = (src or "").strip()
+    if not u:
+        return None
+    if u.startswith("//"):
+        u = f"https:{u}"
+    elif u.startswith("/"):
+        u = urljoin(base, u)
+    if not u.startswith("http"):
+        return None
+    return u
+
+
 def _is_probable_ad_iframe(src: str) -> bool:
     s = (src or "").lower()
     return any(x in s for x in ("googlesyndication", "doubleclick", "adservice", "vast", "trafficjunky"))
@@ -243,28 +256,43 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
     streams: list[dict[str, str]] = []
     seen: set[str] = set()
 
-    for video in soup.select("video"):
-        src = (video.get("src") or "").strip()
-        if src:
-            if src.startswith("//"):
-                src = f"https:{src}"
-            elif src.startswith("/"):
-                src = urljoin("https://indianporn365.xyz/", src)
-            if src.startswith("http") and src not in seen:
-                seen.add(src)
-                streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
-        for source in video.select("source[src]"):
-            src = (source.get("src") or "").strip()
-            if not src:
-                continue
-            if src.startswith("//"):
-                src = f"https:{src}"
-            elif src.startswith("/"):
-                src = urljoin("https://indianporn365.xyz/", src)
-            if not src.startswith("http") or src in seen:
+    # Prefer direct player source when available (video.js/html5 player id commonly used by this source).
+    player_video = soup.select_one("video#video_html5_api")
+    if player_video:
+        src = _normalize_media_url(player_video.get("src") or "")
+        if src and src not in seen:
+            seen.add(src)
+            streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
+        for source in player_video.select("source[src]"):
+            src = _normalize_media_url(source.get("src") or "")
+            if not src or src in seen:
                 continue
             seen.add(src)
             streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
+
+    for video in soup.select("video"):
+        src = _normalize_media_url(video.get("src") or "")
+        if src and src not in seen:
+            seen.add(src)
+            streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
+        for source in video.select("source[src]"):
+            src = _normalize_media_url(source.get("src") or "")
+            if not src or src in seen:
+                continue
+            seen.add(src)
+            streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
+
+    # Fallback for cases where `video_html5_api` source is set in raw HTML/JS snippets.
+    for m in re.finditer(
+        r'id=["\']video_html5_api["\'][^>]*\bsrc=["\']([^"\']+)["\']',
+        html,
+        flags=re.IGNORECASE,
+    ):
+        src = _normalize_media_url(m.group(1))
+        if not src or src in seen:
+            continue
+        seen.add(src)
+        streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
 
     for src in _extract_inline_urls(html):
         if src in seen:
