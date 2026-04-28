@@ -508,23 +508,27 @@ def _extract_video_data(html: str) -> dict[str, Any]:
         if "480" in q: return 480
         if "240" in q: return 240
         return 0
-        
-    # Filter streams to keep ONLY 'hls' format
-    streams = [s for s in streams if s.get("format") == "hls"]
 
-    # Deduplicate streams based on URL
+    
+    # Keep both HLS and MP4 so /api/v1/videos/download can expose MP4 links.
+    # Deduplicate streams based on URL + format to preserve both variants.
     unique_urls = set()
     unique_streams = []
     for s in streams:
-        if s["url"] not in unique_urls:
-            unique_urls.add(s["url"])
+        key = (s.get("url"), s.get("format"))
+        if key not in unique_urls:
+            unique_urls.add(key)
             unique_streams.append(s)
     streams = unique_streams
 
     streams.sort(key=quality_score, reverse=True)
     
     default_url = None
-    if streams:
+    # Preserve stream endpoint behavior: prefer HLS as default when present.
+    hls_stream = next((s for s in streams if s.get("format") == "hls"), None)
+    if hls_stream:
+        default_url = hls_stream["url"]
+    elif streams:
         default_url = streams[0]["url"]
     elif hls_url:
         default_url = hls_url
