@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
+import httpx
 from bs4 import BeautifulSoup
 
 from app.core.pool import fetch_html as pool_fetch_html
@@ -175,6 +177,37 @@ def _extract_inline_urls(html: str) -> list[str]:
     return list(dict.fromkeys(urls))
 
 
+def _is_probable_ad_iframe(src: str) -> bool:
+    s = (src or "").lower()
+    ad_hosts_or_markers = (
+        "bngdin.com",
+        "bongacams",
+        "spyglass",
+        "reklon.net",
+        "doubleclick",
+        "googlesyndication",
+        "adservice",
+        "exoclick",
+        "trafficjunky",
+        "/promo.php",
+        "dynamic_banner",
+    )
+    return any(marker in s for marker in ad_hosts_or_markers)
+
+
+def _extract_native_embed_url(html: str, video_url: str) -> Optional[str]:
+    # Prefer same-site embed endpoint when available: /embed/{id}
+    m = re.search(r"https?://(?:www\.)?blowjobs\.pro/embed/\d+\b", html, flags=re.IGNORECASE)
+    if m:
+        return m.group(0).strip()
+
+    # Fallback: derive from canonical video URL /videos/{id}/{slug}/
+    vm = re.search(r"/videos/(\d+)/", video_url)
+    if vm:
+        return f"https://blowjobs.pro/embed/{vm.group(1)}"
+    return None
+
+
 def _stream_quality_from_url(url: str) -> str:
     low = (url or "").lower()
     q = re.search(r"([1-9]\d{2,3})p", low)
@@ -232,10 +265,15 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
             src = f"https:{src}"
         elif src.startswith("/"):
             src = urljoin(video_url, src)
-        if not src.startswith("http") or src in seen:
+        if not src.startswith("http") or src in seen or _is_probable_ad_iframe(src):
             continue
         seen.add(src)
         streams.append({"url": src, "quality": "embed", "format": "embed"})
+
+    native_embed = _extract_native_embed_url(html, video_url)
+    if native_embed and native_embed not in seen:
+        seen.add(native_embed)
+        streams.append({"url": native_embed, "quality": "blowjobspro", "format": "embed"})
 
     def _score(item: dict[str, str]) -> tuple[int, int]:
         fmt = (item.get("format") or "").lower()
@@ -246,6 +284,8 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
             return (3, qnum)
         if fmt == "hls":
             return (2, qnum)
+        if fmt == "embed" and "blowjobs.pro/embed/" in (item.get("url") or "").lower():
+            return (1, 1)
         return (1, 0)
 
     uniq = list(dict.fromkeys((json.dumps(s, sort_keys=True) for s in streams)))
@@ -266,6 +306,87 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
         "default": default_url,
         "has_video": bool(materialized),
     }
+
+
+async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Optional[str]:
+    """
+    Blowjobs.pro get_file URLs redirect to signed cdn*/remote_control.php links.
+    Resolve and return the redirect Location if available.
+    """
+    base = get_file_url.split("?", 1)[0].strip().rstrip("/")
+    ref = referer.strip() if referer.strip().startswith("http") else "https://blowjobs.pro/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "Referer": ref,
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    async def _attempt(url: str, method: str, range_hdr: Optional[str]) -> Optional[str]:
+        h = dict(headers)
+        if range_hdr:
+            h["Range"] = range_hdr
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+            if method == "HEAD":
+                resp = await client.head(url, headers=h)
+            else:
+                resp = await client.get(url, headers=h)
+        if resp.status_code in (301, 302, 303, 307, 308):
+            loc = resp.headers.get("Location")
+            if loc and "remote_control.php" in loc:
+                return loc
+        return None
+
+    attempts = [
+        (f"{base}/", "HEAD", None),
+        (f"{base}/", "GET", "bytes=0-"),
+        (f"{base}/", "GET", "bytes=0-0"),
+        (base, "HEAD", None),
+        (base, "GET", "bytes=0-"),
+        (base, "GET", "bytes=0-0"),
+    ]
+    for u, method, rng in attempts:
+        try:
+            resolved = await asyncio.wait_for(_attempt(u, method, rng), timeout=16.0)
+            if resolved:
+                return resolved
+        except Exception:
+            continue
+    return None
+
+
+async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, referer: str) -> None:
+    streams: list[dict[str, str]] = video.get("streams") or []
+    get_file_mp4 = [s for s in streams if s.get("format") == "mp4" and "get_file" in (s.get("url") or "")]
+    if not get_file_mp4:
+        return
+
+    async def _resolve_one(stream: dict[str, str]) -> tuple[dict[str, str], Optional[str]]:
+        resolved = await _get_file_to_remote_playable(stream["url"], referer=referer)
+        return stream, resolved
+
+    resolved_pairs = await asyncio.gather(*[_resolve_one(s) for s in get_file_mp4])
+    for stream, resolved in resolved_pairs:
+        if resolved:
+            stream["url"] = resolved
+        else:
+            streams.remove(stream)
+
+    remote_mp4 = [s for s in streams if s.get("format") == "mp4" and "remote_control.php" in (s.get("url") or "")]
+    hls = next((s for s in streams if s.get("format") == "hls"), None)
+    embed = next((s for s in streams if s.get("format") == "embed"), None)
+
+    if remote_mp4:
+        video["default"] = remote_mp4[0]["url"]
+    elif hls:
+        video["default"] = hls["url"]
+    elif embed:
+        video["default"] = embed["url"]
+    else:
+        video["default"] = None
+
+    video["hls"] = hls["url"] if hls else None
+    video["has_video"] = bool(remote_mp4) or bool(hls) or bool(embed)
 
 
 def parse_video_page(html: str, url: str) -> dict[str, Any]:
@@ -351,7 +472,9 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
 
 async def scrape(url: str) -> dict[str, Any]:
     html = await fetch_page(url, referer=url)
-    return parse_video_page(html, url)
+    data = parse_video_page(html, url)
+    await _resolve_video_streams_to_remote_playable(data.get("video", {}), referer=url)
+    return data
 
 
 def _build_list_page_url(base_url: str, page: int) -> str:
