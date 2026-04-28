@@ -173,16 +173,28 @@ def _normalize_video_href(href: str) -> Optional[str]:
 def _extract_inline_urls(html: str) -> list[str]:
     unescaped = html.replace("\\/", "/").replace("\\u0026", "&")
     urls: list[str] = []
-    for pat in (
-        r"https?://[^\s\"'<>]+\.m3u8[^\s\"'<>]*",
-        r"https?://[^\s\"'<>]+\.mp4[^\s\"'<>]*",
-        r"https?://[^\s\"'<>]+/get_file/[^\s\"'<>]+",
-    ):
-        for m in re.finditer(pat, unescaped, flags=re.IGNORECASE):
-            u = m.group(0).strip()
-            if u:
-                urls.append(u)
+    for m in re.finditer(r"https?://[^\s\"'<>]+", unescaped, flags=re.IGNORECASE):
+        u = m.group(0).strip()
+        if u and _detect_media_format(u):
+            urls.append(u)
     return list(dict.fromkeys(urls))
+
+
+def _detect_media_format(url: str) -> Optional[str]:
+    low = (url or "").lower()
+    path = urlparse(url).path.lower() if url else ""
+    if "/get_file/" in low:
+        return "mp4"
+    if path.endswith(".m3u8"):
+        return "hls"
+    if path.endswith(".mp4"):
+        return "mp4"
+    return None
+
+
+def _is_preview_media_url(url: str) -> bool:
+    path = urlparse(url).path.lower() if url else ""
+    return "_preview.mp4" in path or path.endswith("/preview.mp4")
 
 
 def _is_probable_ad_iframe(src: str) -> bool:
@@ -215,10 +227,12 @@ def _extract_native_embed_url(html: str, video_url: str) -> Optional[str]:
 
 def _stream_quality_from_url(url: str) -> str:
     low = (url or "").lower()
+    if _is_preview_media_url(url):
+        return "preview"
     q = re.search(r"([1-9]\d{2,3})p", low)
     if q:
         return f"{q.group(1)}p"
-    if ".m3u8" in low:
+    if _detect_media_format(url) == "hls":
         return "adaptive"
     return "source"
 
@@ -231,16 +245,14 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
         href = (a.get("href") or "").strip()
         if not href:
             continue
-        low = href.lower()
-        if ".mp4" not in low and "/get_file/" not in low:
-            continue
         if href.startswith("//"):
             href = f"https:{href}"
         elif href.startswith("/"):
             href = urljoin(video_url, href)
-        if href.startswith("http") and href not in seen:
+        fmt = _detect_media_format(href)
+        if href.startswith("http") and href not in seen and fmt:
             seen.add(href)
-            streams.append({"url": href, "quality": _stream_quality_from_url(href), "format": "mp4"})
+            streams.append({"url": href, "quality": _stream_quality_from_url(href), "format": fmt})
 
     for video in soup.select("video"):
         for source in video.select("source[src]"):
@@ -251,16 +263,20 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
                 src = f"https:{src}"
             elif src.startswith("/"):
                 src = urljoin(video_url, src)
-            if not src.startswith("http") or src in seen:
+            fmt = _detect_media_format(src)
+            if not src.startswith("http") or src in seen or not fmt:
                 continue
             seen.add(src)
-            streams.append({"url": src, "quality": _stream_quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
+            streams.append({"url": src, "quality": _stream_quality_from_url(src), "format": fmt})
 
     for src in _extract_inline_urls(html):
         if src in seen:
             continue
+        fmt = _detect_media_format(src)
+        if not fmt:
+            continue
         seen.add(src)
-        streams.append({"url": src, "quality": _stream_quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
+        streams.append({"url": src, "quality": _stream_quality_from_url(src), "format": fmt})
 
     for iframe in soup.select("iframe[src]"):
         src = (iframe.get("src") or "").strip()
@@ -282,11 +298,12 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
 
     def _score(item: dict[str, str]) -> tuple[int, int]:
         fmt = (item.get("format") or "").lower()
+        stream_url = item.get("url") or ""
         qtxt = item.get("quality") or ""
         q = re.search(r"(\d{3,4})", qtxt)
         qnum = int(q.group(1)) if q else 0
         if fmt == "mp4":
-            return (3, qnum)
+            return (2, qnum) if _is_preview_media_url(stream_url) else (3, qnum)
         if fmt == "hls":
             return (2, qnum)
         if fmt == "embed" and "blackporn24.com/embed/" in (item.get("url") or "").lower():
@@ -356,11 +373,28 @@ async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Op
     return None
 
 
+def _extract_video_id(url: str) -> Optional[str]:
+    m = re.search(r"/videos/(\d+)/", url or "", flags=re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def _url_contains_video_id(url: str, video_id: str) -> bool:
+    low = (url or "").lower()
+    vid = str(video_id).lower()
+    return (
+        f"/{vid}/" in low
+        or f"/{vid}." in low
+        or f"%2f{vid}%2f" in low
+        or f"%2f{vid}.mp4" in low
+    )
+
+
 async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, referer: str) -> None:
     streams: list[dict[str, str]] = video.get("streams") or []
     get_file_mp4 = [s for s in streams if s.get("format") == "mp4" and "get_file" in (s.get("url") or "")]
     if not get_file_mp4:
         return
+    video_id = _extract_video_id(referer)
 
     async def _resolve_one(stream: dict[str, str]) -> tuple[dict[str, str], Optional[str]]:
         resolved = await _get_file_to_remote_playable(stream["url"], referer=referer)
@@ -369,6 +403,9 @@ async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, re
     resolved_pairs = await asyncio.gather(*[_resolve_one(s) for s in get_file_mp4])
     for stream, resolved in resolved_pairs:
         if resolved:
+            if video_id and not _url_contains_video_id(resolved, video_id):
+                streams.remove(stream)
+                continue
             stream["url"] = resolved
         else:
             streams.remove(stream)
