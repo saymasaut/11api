@@ -648,3 +648,109 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=viralkand"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://viralkand.com/<video-post-slug>/"
 ```
+
+## Blowjobs.pro Implementation Notes
+
+[Blowjobs.pro](https://blowjobs.pro/) is a tube-style site with canonical video pages under `/videos/{id}/{slug}/`, sortable listing views (Newest/Hottest/Most Viewed/Top Rated), category pages, model pages, and search.
+
+### Host aliases
+
+- `blowjobs.pro`
+- `www.blowjobs.pro`
+
+Example:
+
+```python
+def can_handle(host: str) -> bool:
+    h = (host or "").lower()
+    return h == "blowjobs.pro" or h.endswith(".blowjobs.pro")
+```
+
+### Listing and pagination (`list_videos`)
+
+Recommended list strategy:
+
+- Parse video cards/anchors that match `/videos/{numeric_id}/{slug}/`.
+- Keep only same-domain URLs and skip utility/auth links (`/login`, `/signup`, `/terms`, `/dmca`, `/2257`).
+- Prefer metadata in this order:
+  - title: anchor text, then `title` attribute, then image `alt`
+  - thumbnail: `data-src`, `data-original`, `srcset` first candidate, then `src`
+  - duration: regex for `mm:ss` / `hh:mm:ss` from nearby card text
+  - views/rating: parse compact counters (`304.8k`, `1.3m`) and percentages when easy; keep optional
+- Page 1 should use `base_url` unchanged.
+- For page > 1, follow whichever paginator route the page exposes first (numeric path segment or query param); fallback to `?page={n}`.
+
+Useful base URLs to support:
+
+- `https://blowjobs.pro/`
+- `https://blowjobs.pro/videos/newest/`
+- `https://blowjobs.pro/videos/hottest/`
+- `https://blowjobs.pro/videos/most-viewed/`
+- `https://blowjobs.pro/videos/top-rated/`
+- `https://blowjobs.pro/categories/<category-slug>/`
+- `https://blowjobs.pro/models/<model-slug>/`
+- `https://blowjobs.pro/search/<term>/` (if search route is enabled in live markup)
+
+### Metadata and streams (`scrape`)
+
+For detail pages:
+
+- Extract metadata from:
+  1. `og:title`, `og:description`, `og:image`
+  2. `twitter:title`, `twitter:description`, `twitter:image`
+  3. JSON-LD `VideoObject` (`name`, `description`, `thumbnailUrl`, `duration`)
+  4. visible title fallback
+- Scan for playable URLs in:
+  - `<video src>` / `<video><source src>`
+  - inline scripts for `.mp4` / `.m3u8`
+  - iframe embeds as fallback
+- Unescape script URLs before use (`\\/` -> `/`, `\\u0026` -> `&`).
+- Build `video.streams` with:
+  - direct files: `format="mp4"` or `format="hls"`
+  - embeds: `format="embed"` with `quality` labels (`Server 1`, `Server 2`, ...)
+- Set `video.default` preference:
+  1. highest-quality direct MP4
+  2. HLS URL
+  3. first embed URL
+
+If detail pages expose only third-party embeds, return embed streams instead of fabricating direct media URLs.
+
+### Categories (`get_categories`)
+
+Seed `categories.json` from public category pages under `/categories/` and keep schema aligned with existing scraper folders so `/api/v1/categories?source=blowjobspro` returns valid `CategoryItem` entries.
+
+### Registration checklist for Blowjobs.pro
+
+Besides creating `backend/app/scrapers/blowjobspro/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=blowjobspro`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - unsupported-host help text
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry
+
+If URL validation still uses strict allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### Blowjobs.pro verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://blowjobs.pro/videos/7209/18-year-old-teen-gives-deepthroat-pov-blowjob/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://blowjobs.pro/videos/newest/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=blowjobspro"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://blowjobs.pro/videos/7209/18-year-old-teen-gives-deepthroat-pov-blowjob/"
+```

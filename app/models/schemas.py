@@ -70,6 +70,7 @@ class ScrapeRequest(BaseModel):
             "beeg.com",
             "spankbang.com",
             "viralkand.com",
+            "blowjobs.pro",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v
@@ -133,6 +134,7 @@ class ListRequest(BaseModel):
             "beeg.com",
             "spankbang.com",
             "viralkand.com",
+            "blowjobs.pro",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v
