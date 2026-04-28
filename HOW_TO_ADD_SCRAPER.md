@@ -1673,3 +1673,110 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=leakedamateurporn"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://leakedamateurporn.xyz/<video-post-slug>/"
 ```
+
+## Zeenite Implementation Notes
+
+[Zeenite](https://zeenite.com/) is a tube-style index where canonical detail pages follow `/videos/{id}/{slug}/`. The site exposes feed/navigation views for New Videos, Top Videos, Most Viewed, Categories, Models, and search.
+
+Use `desiporn`, `thotsporn`, and `xhamster2` as close implementation references.
+
+### Host aliases
+
+- `zeenite.com`
+- `www.zeenite.com`
+
+Example:
+
+```python
+def can_handle(host: str) -> bool:
+    h = (host or "").lower()
+    return h == "zeenite.com" or h.endswith(".zeenite.com")
+```
+
+### Listing and pagination (`list_videos`)
+
+Recommended list strategy:
+
+- Parse card links that match `/videos/{numeric_id}/{slug}/`.
+- Keep only same-domain video detail URLs and skip utility pages such as `/terms` and `/2257`.
+- Prefer metadata in this order:
+  - title: anchor text, then `title`, then image `alt`
+  - thumbnail: `data-src`, `data-original`, first `srcset` candidate, then `src`
+  - duration/views/rating: parse compact values from nearby card text when available
+- Page 1 should use `base_url` unchanged.
+- For page > 1, follow any visible paginator route first; if not present, fallback to common patterns like `?page={n}`.
+- If list endpoints are loaded incrementally ("Load more"), allow scraper fallback logic that can parse the first page reliably and advance by discovered links/params.
+
+Useful list base URLs to support:
+
+- `https://zeenite.com/`
+- `https://zeenite.com/new-videos/` (or equivalent route used by live markup)
+- `https://zeenite.com/top-videos/` (or equivalent route used by live markup)
+- `https://zeenite.com/most-viewed/` (or equivalent route used by live markup)
+- `https://zeenite.com/categories/`
+- `https://zeenite.com/models/`
+- `https://zeenite.com/search/<term>/` (or the query/search endpoint exposed by the page)
+
+### Metadata and streams (`scrape`)
+
+For detail pages:
+
+- Metadata fallback order:
+  1. `og:title`, `og:description`, `og:image`
+  2. `twitter:title`, `twitter:description`, `twitter:image`
+  3. JSON-LD `VideoObject`
+  4. visible `h1` / page `<title>`
+- Stream extraction order:
+  - direct `<video src>` and `<video><source src>`
+  - inline script URLs matching `.mp4` or `.m3u8`
+  - iframe embeds as fallback
+- Unescape script URLs before use (`\\/` -> `/`, `\\u0026` -> `&`).
+- Build `video.streams` with:
+  - direct media: `format="mp4"` / `format="hls"`
+  - embeds: `format="embed"` with qualities like `Server 1`, `Server 2`, ...
+- Set `video.default` preference:
+  1. highest-priority direct MP4
+  2. HLS URL
+  3. first playable embed
+
+If a page exposes only embedded players, return embed streams instead of manufacturing direct media URLs.
+
+### Categories (`get_categories`)
+
+Seed `categories.json` from the site's public Categories and Models indexes and keep schema aligned with existing scraper folders so `/api/v1/categories?source=zeenite` returns valid `CategoryItem` entries.
+
+### Registration checklist for Zeenite
+
+Besides creating `backend/app/scrapers/zeenite/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=zeenite`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host/unsupported-host help text
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### Zeenite verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://zeenite.com/videos/215600/dance-kabyle-chaude-9a7ba-de-tizi-ouazou/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://zeenite.com/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=zeenite"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://zeenite.com/videos/215600/dance-kabyle-chaude-9a7ba-de-tizi-ouazou/"
+```
