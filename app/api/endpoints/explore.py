@@ -237,7 +237,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://app.hentaiser.app/animes/",
         nickname="Hentaiser",
-        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/hentaizer.webp",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/hentaizer.webp",
         accentColor="#6A1B9A",
         category="hentai",
         isVerified=False,
