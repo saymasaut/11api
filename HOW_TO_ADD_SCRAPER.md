@@ -1559,3 +1559,117 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=thotsporn"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://thotsporn.com/<video-post-slug>/"
 ```
+
+## LeakedAmateurPorn Implementation Notes
+
+[Leaked Amateur Porn](https://leakedamateurporn.xyz/) is a WordPress-style clip index with:
+
+- tabbed listing views (Latest videos, Longest videos, Random videos)
+- taxonomy-driven navigation (Categories, Tags)
+- numbered pagination (`1 2 3 ... Next Last`)
+- detail pages that may expose playable sources via native `<video>`, iframe embeds, or inline script URLs
+
+Use `thotsporn`, `desimms2`, and `kamababa` as the closest implementation references.
+
+### Host aliases
+
+- `leakedamateurporn.xyz`
+- `www.leakedamateurporn.xyz`
+
+Example:
+
+```python
+def can_handle(host: str) -> bool:
+    h = (host or "").lower()
+    return h == "leakedamateurporn.xyz" or h.endswith(".leakedamateurporn.xyz")
+```
+
+### Listing and pagination (`list_videos`)
+
+Recommended list strategy:
+
+- Parse candidate detail-page links from card thumbnail/title anchors in the main grid.
+- Keep only same-domain post URLs and skip utility/account links such as:
+  - login/reset-password/profile/auth pages
+  - legal/compliance pages (`/terms`, `/privacy`, `/2257`, `/contact`) when present
+  - taxonomy root pages without a concrete video detail target
+- Prefer metadata in this order:
+  - title: anchor `title`, image `alt`, then visible anchor text
+  - thumbnail: `data-src`, `data-lazy-src`, `srcset` first URL, then `src`
+  - duration/views/rating: parse nearby card text where available; keep optional if absent
+- Page 1 should use `base_url` unchanged.
+- For page > 1, follow explicit pager links first. If no pager URL is detected, fallback to WordPress patterns (`/page/{n}/`, then `?paged={n}`).
+- If `base_url` contains a sort/search query, preserve existing query parameters while adding page params.
+
+Useful list base URLs to support:
+
+- `https://leakedamateurporn.xyz/`
+- `https://leakedamateurporn.xyz/categories/`
+- `https://leakedamateurporn.xyz/tags/`
+- `https://leakedamateurporn.xyz/?s=<query>`
+
+### Metadata and streams (`scrape`)
+
+For detail pages:
+
+- Metadata fallback order:
+  1. `og:title`, `og:description`, `og:image`
+  2. `twitter:title`, `twitter:description`, `twitter:image`
+  3. JSON-LD `VideoObject`
+  4. visible `h1` / page `<title>`
+- Stream extraction order:
+  - direct `<video src>` and `<video><source src>`
+  - inline script URLs matching `.mp4` or `.m3u8`
+  - iframe embeds as fallback
+- Unescape script URLs before use (`\\/` -> `/`, `\\u0026` -> `&`).
+- Build `video.streams` with:
+  - direct media: `format="mp4"` / `format="hls"`
+  - embeds: `format="embed"` with qualities like `Server 1`, `Server 2`, ...
+- Set `video.default` preference:
+  1. highest-priority direct MP4
+  2. HLS URL
+  3. first playable embed
+
+If a page exposes only embedded players, return embed streams instead of manufacturing direct media URLs.
+
+### Categories (`get_categories`)
+
+Seed `categories.json` from live category/tag index pages and keep schema aligned with existing scraper folders so `/api/v1/categories?source=leakedamateurporn` returns valid `CategoryItem` entries.
+
+### Registration checklist for LeakedAmateurPorn
+
+Besides creating `backend/app/scrapers/leakedamateurporn/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=leakedamateurporn`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host/unsupported-host help text
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### LeakedAmateurPorn verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://leakedamateurporn.xyz/<video-post-slug>/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://leakedamateurporn.xyz/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://leakedamateurporn.xyz/categories/&page=2&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=leakedamateurporn"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://leakedamateurporn.xyz/<video-post-slug>/"
+```
