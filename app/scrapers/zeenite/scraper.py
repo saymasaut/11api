@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
+import httpx
 from bs4 import BeautifulSoup
 
 from app.core.pool import fetch_html as pool_fetch_html
@@ -144,6 +146,8 @@ def _normalize_video_href(href: str) -> Optional[str]:
 def _detect_media_format(url: str) -> Optional[str]:
     low = (url or "").lower()
     path = urlparse(url).path.lower() if url else ""
+    if "/get_file/" in low:
+        return "mp4"
     if path.endswith(".m3u8"):
         return "hls"
     if path.endswith(".mp4"):
@@ -207,6 +211,13 @@ def _is_probable_ad_iframe(src: str) -> bool:
         "cloudfront.net/pop",
     )
     return any(marker in s for marker in blocked)
+
+
+def _embed_quality_label(src: str, server_idx: int) -> str:
+    low = (src or "").lower()
+    if "zeenite.com/embed/" in low:
+        return "zeenite"
+    return f"Server {server_idx}"
 
 
 def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str, Any]:
@@ -294,7 +305,7 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
         if _is_non_video_asset_url(src):
             continue
         seen.add(src)
-        streams.append({"url": src, "quality": f"Server {server_idx}", "format": "embed"})
+        streams.append({"url": src, "quality": _embed_quality_label(src, server_idx), "format": "embed"})
         server_idx += 1
 
     def _score(item: dict[str, str]) -> tuple[int, int]:
@@ -326,6 +337,112 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
         "default": default_url,
         "has_video": bool(materialized),
     }
+
+
+async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Optional[str]:
+    """
+    Resolve /get_file/ URLs to the final CDN-playable URL.
+    """
+    base = get_file_url.split("?", 1)[0].strip().rstrip("/")
+    ref = referer.strip() if referer.strip().startswith("http") else BASE_SITE
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "Referer": ref,
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    async def _attempt(url: str, method: str, range_hdr: Optional[str]) -> Optional[str]:
+        h = dict(headers)
+        if range_hdr:
+            h["Range"] = range_hdr
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+            if method == "HEAD":
+                resp = await client.head(url, headers=h)
+            else:
+                resp = await client.get(url, headers=h)
+        if resp.status_code in (301, 302, 303, 307, 308):
+            loc = resp.headers.get("Location")
+            if not loc:
+                return None
+            if _is_non_video_asset_url(loc) or _is_probable_ad_iframe(loc):
+                return None
+            fmt = _detect_media_format(loc)
+            if fmt in ("mp4", "hls"):
+                return loc
+        return None
+
+    attempts = [
+        (f"{base}/", "HEAD", None),
+        (f"{base}/", "GET", "bytes=0-"),
+        (f"{base}/", "GET", "bytes=0-0"),
+        (base, "HEAD", None),
+        (base, "GET", "bytes=0-"),
+        (base, "GET", "bytes=0-0"),
+    ]
+    for u, method, rng in attempts:
+        try:
+            resolved = await asyncio.wait_for(_attempt(u, method, rng), timeout=16.0)
+            if resolved:
+                return resolved
+        except Exception:
+            continue
+    return None
+
+
+def _extract_video_id(url: str) -> Optional[str]:
+    m = re.search(r"/videos/(\d+)/", url or "", flags=re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def _url_contains_video_id(url: str, video_id: str) -> bool:
+    low = (url or "").lower()
+    vid = str(video_id).lower()
+    return (
+        f"/{vid}/" in low
+        or f"/{vid}." in low
+        or f"%2f{vid}%2f" in low
+        or f"%2f{vid}.mp4" in low
+        or f"{vid}.mp4" in low
+    )
+
+
+async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, referer: str) -> None:
+    streams: list[dict[str, str]] = video.get("streams") or []
+    get_file_mp4 = [s for s in streams if s.get("format") == "mp4" and "get_file" in (s.get("url") or "")]
+    if not get_file_mp4:
+        return
+    video_id = _extract_video_id(referer)
+
+    async def _resolve_one(stream: dict[str, str]) -> tuple[dict[str, str], Optional[str]]:
+        resolved = await _get_file_to_remote_playable(stream["url"], referer=referer)
+        return stream, resolved
+
+    resolved_pairs = await asyncio.gather(*[_resolve_one(s) for s in get_file_mp4])
+    for stream, resolved in resolved_pairs:
+        if resolved:
+            if video_id and not _url_contains_video_id(resolved, video_id):
+                streams.remove(stream)
+                continue
+            stream["url"] = resolved
+        else:
+            streams.remove(stream)
+
+    direct_mp4 = [s for s in streams if s.get("format") == "mp4" and "get_file" not in (s.get("url") or "")]
+    hls = next((s for s in streams if s.get("format") == "hls"), None)
+    embed = next((s for s in streams if s.get("format") == "embed"), None)
+
+    if direct_mp4:
+        video["default"] = direct_mp4[0]["url"]
+    elif hls:
+        video["default"] = hls["url"]
+    elif embed:
+        video["default"] = embed["url"]
+    else:
+        video["default"] = None
+
+    video["hls"] = hls["url"] if hls else None
+    video["has_video"] = bool(direct_mp4) or bool(hls) or bool(embed)
 
 
 def parse_video_page(html: str, url: str) -> dict[str, Any]:
@@ -386,7 +503,9 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
 
 async def scrape(url: str) -> dict[str, Any]:
     html = await fetch_page(url, referer=url)
-    return parse_video_page(html, url)
+    data = parse_video_page(html, url)
+    await _resolve_video_streams_to_remote_playable(data.get("video", {}), referer=url)
+    return data
 
 
 def _build_list_page_url(base_url: str, page: int) -> str:
