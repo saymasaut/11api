@@ -276,7 +276,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://blowjobs.pro/videos/newest/",
         nickname="BlowjobsPro",
-        favicon="https://blowjobs.pro/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/blowjobs.ico",
         accentColor="#EC407A",
         category="porn",
         isVerified=False,
@@ -289,7 +289,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://blackporn24.com/",
         nickname="BlackPorn24",
-        favicon="https://blackporn24.com/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/blackporn24.ico",
         accentColor="#6D4C41",
         category="porn",
         isVerified=False,
@@ -302,7 +302,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://lesbianporn8.net/",
         nickname="LesbianPorn8",
-        favicon="https://lesbianporn8.net/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/lesbianporn8.ico",
         accentColor="#AB47BC",
         category="porn",
         isVerified=False,
@@ -315,7 +315,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://milfporn8.net/",
         nickname="MILFPorn8",
-        favicon="https://milfporn8.net/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/milfporn8.ico",
         accentColor="#8D6E63",
         category="porn",
         isVerified=False,
