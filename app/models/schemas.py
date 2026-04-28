@@ -79,6 +79,7 @@ class ScrapeRequest(BaseModel):
             "thekamababa.com",
             "desimms2.site",
             "desiporn.one",
+            "thotsporn.com",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v
@@ -151,6 +152,7 @@ class ListRequest(BaseModel):
             "thekamababa.com",
             "desimms2.site",
             "desiporn.one",
+            "thotsporn.com",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v

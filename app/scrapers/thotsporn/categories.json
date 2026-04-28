@@ -1,0 +1,9 @@
+[
+  { "id": "home", "name": "Home", "url": "https://thotsporn.com/" },
+  { "id": "latest", "name": "Latest", "url": "https://thotsporn.com/" },
+  { "id": "longest", "name": "Longest", "url": "https://thotsporn.com/?filter=longest" },
+  { "id": "random", "name": "Random", "url": "https://thotsporn.com/?filter=random" },
+  { "id": "categories", "name": "Categories", "url": "https://thotsporn.com/categories/" },
+  { "id": "tags", "name": "Tags", "url": "https://thotsporn.com/tags/" },
+  { "id": "actors", "name": "Actors", "url": "https://thotsporn.com/actors/" }
+]
