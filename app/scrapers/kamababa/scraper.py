@@ -156,6 +156,21 @@ def _extract_views_text(text: str | None) -> Optional[str]:
     return _clean_views_text(m.group(1))
 
 
+def _extract_views_from_container(container: Any) -> Optional[str]:
+    if container is None:
+        return None
+    tag = container.select_one(".views")
+    if tag:
+        txt = tag.get_text(" ", strip=True)
+        if txt:
+            direct = _extract_views_text(txt)
+            if direct:
+                return direct
+            # Fallback for cases like "<span class='views'>146K</span>"
+            return _clean_views_text(txt)
+    return None
+
+
 def _quality_from_url(url: str, *, fallback: str = "source") -> str:
     low = (url or "").lower()
     q = re.search(r"([1-9]\d{2,3})p", low)
@@ -508,6 +523,8 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
         if dm:
             duration = dm.group(0)
     if not views:
+        views = _extract_views_from_container(soup)
+    if not views:
         views = _extract_views_text(text_blob)
 
     tags = list(dict.fromkeys([t for t in tags if t]))
@@ -592,7 +609,9 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
         if dm:
             duration = dm.group(0)
 
-        views = _extract_views_text(ctext)
+        views = _extract_views_from_container(container)
+        if not views:
+            views = _extract_views_text(ctext)
 
         seen.add(href)
         items.append(
