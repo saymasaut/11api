@@ -185,6 +185,8 @@ def _detect_media_format(url: str) -> Optional[str]:
 def _is_probable_ad_iframe(src: str) -> bool:
     s = (src or "").lower()
     ad_hosts_or_markers = (
+        "app.yrotary.com",
+        "/api/spots/",
         "doubleclick",
         "googlesyndication",
         "adservice",
