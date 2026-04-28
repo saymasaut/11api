@@ -140,6 +140,8 @@ def _extract_inline_media_candidates(html: str) -> list[str]:
 
 def _is_probable_ad_iframe(src: str) -> bool:
     s = (src or "").lower()
+    if "callistanise.com/embed/" in s:
+        return False
     blocked_markers = (
         "googlesyndication",
         "doubleclick",
@@ -168,6 +170,7 @@ def _is_probable_playable_embed(src: str) -> bool:
     return any(
         marker in low
         for marker in (
+            "callistanise.com/embed/",
             "/embed/",
             "player",
             "stream",
@@ -206,6 +209,23 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
             continue
         seen.add(src)
         streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
+
+    # Explicit fallback patterns seen on ThotsPorn embeds/CDN wrappers.
+    unescaped = html.replace("\\/", "/").replace("\\u0026", "&")
+    for pat in (
+        r"""https?://callistanise\.com/stream/[^\s"'<>]+\.m3u8[^\s"'<>]*""",
+        r"""https?://callistanise\.com/embed/[^\s"'<>/]+""",
+    ):
+        for m in re.finditer(pat, unescaped, flags=re.IGNORECASE):
+            raw = m.group(0).strip()
+            stream_url = _normalize_media_url(raw)
+            if not stream_url or stream_url in seen:
+                continue
+            seen.add(stream_url)
+            if "/embed/" in stream_url.lower():
+                streams.append({"url": stream_url, "quality": "Server 1", "format": "embed"})
+            else:
+                streams.append({"url": stream_url, "quality": _quality_from_url(stream_url, fallback="adaptive"), "format": "hls"})
 
     server_idx = 1
     for iframe in soup.select("iframe[src]"):
