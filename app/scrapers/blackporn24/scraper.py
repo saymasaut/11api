@@ -363,8 +363,44 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
     }
 
 
-async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Optional[str]:
-    base = get_file_url.split("?", 1)[0].strip().rstrip("/")
+def _extract_flashvar_value(html: str, key: str) -> Optional[str]:
+    """
+    Extract a single-quoted flashvars value like: key: 'value'
+    Returns the raw string value (not URL-decoded).
+    """
+    if not html or not key:
+        return None
+    unescaped = html.replace("\\/", "/").replace("\\u0026", "&")
+    m = re.search(rf"\\b{re.escape(key)}\\s*:\\s*'([^']*)'", unescaped, flags=re.IGNORECASE)
+    return m.group(1).strip() if m else None
+
+
+def _apply_required_query_params(url: str, required: dict[str, str]) -> str:
+    if not required:
+        return url
+    p = urlparse(url)
+    q = dict(parse_qsl(p.query, keep_blank_values=True))
+    changed = False
+    for k, v in required.items():
+        if v and not q.get(k):
+            q[k] = v
+            changed = True
+    if not changed:
+        return url
+    return urlunparse((p.scheme, p.netloc, p.path, p.params, urlencode(q), p.fragment))
+
+
+async def _get_file_to_remote_playable(
+    get_file_url: str,
+    *,
+    referer: str,
+    license_code: Optional[str] = None,
+    rnd: Optional[str] = None,
+) -> Optional[str]:
+    original = (get_file_url or "").strip()
+    if not original:
+        return None
+    base_no_query = original.split("?", 1)[0].strip().rstrip("/")
     ref = referer.strip() if referer.strip().startswith("http") else "https://blackporn24.com/"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
@@ -372,6 +408,11 @@ async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Op
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
     }
+    required_params: dict[str, str] = {}
+    if license_code:
+        required_params["license_code"] = str(license_code)
+    if rnd:
+        required_params["rnd"] = str(rnd)
 
     async def _attempt(url: str, method: str, range_hdr: Optional[str]) -> Optional[str]:
         """
@@ -390,7 +431,7 @@ async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Op
                     return await client.head(u, headers=h)
                 return await client.get(u, headers=h)
 
-        next_url = url
+        next_url = _apply_required_query_params(url, required_params)
         for _ in range(4):
             resp = await _one(next_url)
             if resp is None:
@@ -408,12 +449,18 @@ async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Op
         return None
 
     attempts = [
-        (f"{base}/", "HEAD", None),
-        (f"{base}/", "GET", "bytes=0-"),
-        (f"{base}/", "GET", "bytes=0-0"),
-        (base, "HEAD", None),
-        (base, "GET", "bytes=0-"),
-        (base, "GET", "bytes=0-0"),
+        (original, "HEAD", None),
+        (original, "GET", "bytes=0-"),
+        (original, "GET", "bytes=0-0"),
+        (f"{original.rstrip('/')}/", "HEAD", None),
+        (f"{original.rstrip('/')}/", "GET", "bytes=0-"),
+        (f"{original.rstrip('/')}/", "GET", "bytes=0-0"),
+        (f"{base_no_query}/", "HEAD", None),
+        (f"{base_no_query}/", "GET", "bytes=0-"),
+        (f"{base_no_query}/", "GET", "bytes=0-0"),
+        (base_no_query, "HEAD", None),
+        (base_no_query, "GET", "bytes=0-"),
+        (base_no_query, "GET", "bytes=0-0"),
     ]
     for u, method, rng in attempts:
         try:
@@ -447,9 +494,16 @@ async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, re
     if not get_file_mp4:
         return
     video_id = _extract_video_id(referer)
+    license_code = video.get("license_code")
+    rnd = video.get("rnd")
 
     async def _resolve_one(stream: dict[str, str]) -> tuple[dict[str, str], Optional[str]]:
-        resolved = await _get_file_to_remote_playable(stream["url"], referer=referer)
+        resolved = await _get_file_to_remote_playable(
+            stream["url"],
+            referer=referer,
+            license_code=str(license_code) if license_code else None,
+            rnd=str(rnd) if rnd else None,
+        )
         return stream, resolved
 
     resolved_pairs = await asyncio.gather(*[_resolve_one(s) for s in get_file_mp4])
@@ -540,6 +594,8 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
             description = m.group(1).strip()
 
     video = _extract_streams(soup, html, url)
+    license_code = _extract_flashvar_value(html, "license_code")
+    rnd = _extract_flashvar_value(html, "rnd")
     tags = list(dict.fromkeys([t for t in tags if t]))
 
     return {
@@ -556,6 +612,9 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
         "video": video,
         "related_videos": [],
         "preview_url": None,
+        # Keep these for get_file -> remote_control resolving on some KVS deployments.
+        "license_code": license_code,
+        "rnd": rnd,
     }
 
 
