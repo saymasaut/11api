@@ -257,6 +257,18 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
             streams.append({"url": href, "quality": _stream_quality_from_url(href), "format": fmt})
 
     for video in soup.select("video"):
+        # Some pages set the media URL directly on the <video> tag (no <source> children).
+        direct_src = (video.get("src") or "").strip()
+        if direct_src:
+            if direct_src.startswith("//"):
+                direct_src = f"https:{direct_src}"
+            elif direct_src.startswith("/"):
+                direct_src = urljoin(video_url, direct_src)
+            fmt = _detect_media_format(direct_src)
+            if direct_src.startswith("http") and direct_src not in seen and fmt:
+                seen.add(direct_src)
+                streams.append({"url": direct_src, "quality": _stream_quality_from_url(direct_src), "format": fmt})
+
         for source in video.select("source[src]"):
             src = (source.get("src") or "").strip()
             if not src:
