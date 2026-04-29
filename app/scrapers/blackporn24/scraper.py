@@ -243,6 +243,20 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
     streams: list[dict[str, str]] = []
     seen: set[str] = set()
 
+    def _add_stream(raw_url: str, *, quality_hint: Optional[str] = None) -> None:
+        u = (raw_url or "").strip()
+        if not u:
+            return
+        if u.startswith("//"):
+            u = f"https:{u}"
+        elif u.startswith("/"):
+            u = urljoin(video_url, u)
+        fmt = _detect_media_format(u)
+        if not u.startswith("http") or u in seen or not fmt:
+            return
+        seen.add(u)
+        streams.append({"url": u, "quality": quality_hint or _stream_quality_from_url(u), "format": fmt})
+
     for a in soup.select("a[href]"):
         href = (a.get("href") or "").strip()
         if not href:
@@ -260,14 +274,7 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
         # Some pages set the media URL directly on the <video> tag (no <source> children).
         direct_src = (video.get("src") or "").strip()
         if direct_src:
-            if direct_src.startswith("//"):
-                direct_src = f"https:{direct_src}"
-            elif direct_src.startswith("/"):
-                direct_src = urljoin(video_url, direct_src)
-            fmt = _detect_media_format(direct_src)
-            if direct_src.startswith("http") and direct_src not in seen and fmt:
-                seen.add(direct_src)
-                streams.append({"url": direct_src, "quality": _stream_quality_from_url(direct_src), "format": fmt})
+            _add_stream(direct_src)
 
         for source in video.select("source[src]"):
             src = (source.get("src") or "").strip()
@@ -291,6 +298,18 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
             continue
         seen.add(src)
         streams.append({"url": src, "quality": _stream_quality_from_url(src), "format": fmt})
+
+    # KVS/kt_player pages often keep the MP4 in a JS flashvars object, sometimes with a prefix like:
+    # "function/0/https://.../get_file/...mp4/?br=..."
+    unescaped = html.replace("\\/", "/").replace("\\u0026", "&")
+    for m in re.finditer(r"\bvideo_url(?:_hd)?\s*:\s*'([^']+)'", unescaped, flags=re.IGNORECASE):
+        raw = m.group(1).strip()
+        if not raw:
+            continue
+        # If value is prefixed (e.g. "function/0/https://..."), keep only the URL part.
+        hm = re.search(r"(https?://[^\s\"'<>]+)", raw, flags=re.IGNORECASE)
+        candidate = hm.group(1) if hm else raw
+        _add_stream(candidate, quality_hint="source")
 
     for iframe in soup.select("iframe[src]"):
         src = (iframe.get("src") or "").strip()
