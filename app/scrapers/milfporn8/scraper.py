@@ -331,7 +331,16 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
 
 
 async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Optional[str]:
-    base = get_file_url.split("?", 1)[0].strip().rstrip("/")
+    original = (get_file_url or "").strip()
+    if not original:
+        return None
+    parsed = urlparse(original)
+    base = original.split("?", 1)[0].strip().rstrip("/")
+    original_with_trailing = original
+    if parsed.path and not parsed.path.endswith("/"):
+        original_with_trailing = urlunparse(
+            (parsed.scheme, parsed.netloc, parsed.path + "/", parsed.params, parsed.query, parsed.fragment)
+        )
     ref = referer.strip() if referer.strip().startswith("http") else "https://milfporn8.net/"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
@@ -369,6 +378,12 @@ async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Op
         return None
 
     attempts = [
+        (original_with_trailing, "HEAD", None),
+        (original_with_trailing, "GET", "bytes=0-"),
+        (original_with_trailing, "GET", "bytes=0-0"),
+        (original, "HEAD", None),
+        (original, "GET", "bytes=0-"),
+        (original, "GET", "bytes=0-0"),
         (f"{base}/", "HEAD", None),
         (f"{base}/", "GET", "bytes=0-"),
         (f"{base}/", "GET", "bytes=0-0"),
