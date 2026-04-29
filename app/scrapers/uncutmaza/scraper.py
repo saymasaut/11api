@@ -214,10 +214,16 @@ def _is_probable_video_post(parsed: Any) -> bool:
         "cookie-policy",
         "18-u-s-c-2257",
         "dmca",
-        "category",
-        "categories",
+        "hot-web-series",
+        "ott",
+        "model",
+        "models",
         "tag",
         "tags",
+        "sitemap",
+        "sitemap_index.xml",
+        "category",
+        "categories",
         "page",
         "author",
         "feed",
@@ -488,8 +494,6 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
         container = a.find_parent(["article", "li", "div"]) or a
         img = a.find("img") or (container.find("img") if container else None)
         thumb = _best_image_url(img)
-        if not thumb:
-            continue
 
         title = a.get("title") or (img.get("alt") if img else None) or a.get_text(" ", strip=True)
         title = _clean_title(title) or "Unknown Video"
