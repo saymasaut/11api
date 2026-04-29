@@ -324,6 +324,10 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
 
 
 async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Optional[str]:
+    """
+    LesbianPorn8 get_file URLs redirect to signed cdn*/remote_control.php links.
+    Resolve and return the redirect Location if available.
+    """
     base = get_file_url.split("?", 1)[0].strip().rstrip("/")
     ref = referer.strip() if referer.strip().startswith("http") else "https://lesbianporn8.net/"
     headers = {
@@ -338,7 +342,10 @@ async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Op
         if range_hdr:
             h["Range"] = range_hdr
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
-            resp = await client.head(url, headers=h) if method == "HEAD" else await client.get(url, headers=h)
+            if method == "HEAD":
+                resp = await client.head(url, headers=h)
+            else:
+                resp = await client.get(url, headers=h)
         if resp.status_code in (301, 302, 303, 307, 308):
             loc = resp.headers.get("Location")
             if loc and "remote_control.php" in loc:
