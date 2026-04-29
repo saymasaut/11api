@@ -237,9 +237,35 @@ def _stream_quality_from_url(url: str) -> str:
     return "source"
 
 
+def _extract_fp_engine_video_src(html: str) -> Optional[str]:
+    raw = html_lib.unescape(html or "")
+    # Flowplayer often renders: <video class="fp-engine" src="..."> (sometimes hidden)
+    m = re.search(
+        r"<video[^>]+class=(?:\"[^\"]*\bfp-engine\b[^\"]*\"|'[^']*\bfp-engine\b[^']*')[^>]+src=(?:\"([^\"]+)\"|'([^']+)')",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if not m:
+        return None
+    src = (m.group(1) or m.group(2) or "").strip()
+    return src or None
+
+
 def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str, Any]:
     streams: list[dict[str, str]] = []
     seen: set[str] = set()
+
+    fp_src = _extract_fp_engine_video_src(html)
+    if fp_src:
+        if fp_src.startswith("//"):
+            fp_src = f"https:{fp_src}"
+        elif fp_src.startswith("/"):
+            fp_src = urljoin(video_url, fp_src)
+        fmt = _detect_media_format(fp_src)
+        if fp_src.startswith("http") and fp_src not in seen and fmt:
+            seen.add(fp_src)
+            streams.append({"url": fp_src, "quality": _stream_quality_from_url(fp_src), "format": fmt})
+
     for a in soup.select("a[href]"):
         href = (a.get("href") or "").strip()
         if not href:
