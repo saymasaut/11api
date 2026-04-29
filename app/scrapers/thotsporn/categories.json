@@ -1,5 +1,4 @@
 [
-  { "id": "home", "name": "Home", "url": "https://thotsporn.com/" },
   { "id": "latest", "name": "Latest", "url": "https://thotsporn.com/?filter=latest" },
   { "id": "longest", "name": "Longest", "url": "https://thotsporn.com/?filter=longest" },
   { "id": "random", "name": "Random", "url": "https://thotsporn.com/?filter=random" },

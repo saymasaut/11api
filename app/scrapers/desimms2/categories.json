@@ -1,5 +1,4 @@
 [
-  { "id": "home", "name": "Home", "url": "https://www.desimms2.site/" },
   { "id": "newest", "name": "Newest", "url": "https://www.desimms2.site/?filter=latest" },
   { "id": "best", "name": "Best", "url": "https://www.desimms2.site/?filter=popular" },
   { "id": "most-viewed", "name": "Most Viewed", "url": "https://www.desimms2.site/?filter=most-viewed" },
