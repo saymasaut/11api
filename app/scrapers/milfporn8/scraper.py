@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html as html_lib
 import json
 import os
 import re
@@ -170,7 +171,7 @@ def _normalize_video_href(href: str) -> Optional[str]:
 
 
 def _extract_inline_urls(html: str) -> list[str]:
-    unescaped = html.replace("\\/", "/").replace("\\u0026", "&")
+    unescaped = html_lib.unescape(html).replace("\\/", "/").replace("\\u0026", "&")
     urls: list[str] = []
     for m in re.finditer(r"https?://[^\s\"'<>]+", unescaped, flags=re.IGNORECASE):
         u = m.group(0).strip()
@@ -252,10 +253,22 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
             seen.add(href)
             streams.append({"url": href, "quality": _stream_quality_from_url(href), "format": fmt})
     for video in soup.select("video"):
+        vsrc = (video.get("src") or "").strip()
+        if vsrc:
+            vsrc = html_lib.unescape(vsrc)
+            if vsrc.startswith("//"):
+                vsrc = f"https:{vsrc}"
+            elif vsrc.startswith("/"):
+                vsrc = urljoin(video_url, vsrc)
+            fmt = _detect_media_format(vsrc)
+            if vsrc.startswith("http") and vsrc not in seen and fmt:
+                seen.add(vsrc)
+                streams.append({"url": vsrc, "quality": _stream_quality_from_url(vsrc), "format": fmt})
         for source in video.select("source[src]"):
             src = (source.get("src") or "").strip()
             if not src:
                 continue
+            src = html_lib.unescape(src)
             if src.startswith("//"):
                 src = f"https:{src}"
             elif src.startswith("/"):
@@ -327,6 +340,16 @@ async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Op
         "Accept-Language": "en-US,en;q=0.9",
     }
 
+    def _looks_playable(resp: httpx.Response) -> bool:
+        if resp.status_code not in (200, 206):
+            return False
+        ctype = (resp.headers.get("Content-Type") or "").lower()
+        if ctype.startswith("video/"):
+            return True
+        if "application/octet-stream" in ctype:
+            return True
+        return False
+
     async def _attempt(url: str, method: str, range_hdr: Optional[str]) -> Optional[str]:
         h = dict(headers)
         if range_hdr:
@@ -335,8 +358,14 @@ async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Op
             resp = await client.head(url, headers=h) if method == "HEAD" else await client.get(url, headers=h)
         if resp.status_code in (301, 302, 303, 307, 308):
             loc = resp.headers.get("Location")
-            if loc and "remote_control.php" in loc:
+            if not loc:
+                return None
+            loc = urljoin(url, loc)
+            if "remote_control.php" in loc:
                 return loc
+            return None
+        if _looks_playable(resp):
+            return url
         return None
 
     attempts = [
@@ -390,14 +419,15 @@ async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, re
                 streams.remove(stream)
                 continue
             stream["url"] = resolved
-        else:
-            streams.remove(stream)
 
     remote_mp4 = [s for s in streams if s.get("format") == "mp4" and "remote_control.php" in (s.get("url") or "")]
+    any_mp4 = [s for s in streams if s.get("format") == "mp4"]
     hls = next((s for s in streams if s.get("format") == "hls"), None)
     embed = next((s for s in streams if s.get("format") == "embed"), None)
     if remote_mp4:
         video["default"] = remote_mp4[0]["url"]
+    elif any_mp4:
+        video["default"] = any_mp4[0]["url"]
     elif hls:
         video["default"] = hls["url"]
     elif embed:
@@ -405,7 +435,7 @@ async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, re
     else:
         video["default"] = None
     video["hls"] = hls["url"] if hls else None
-    video["has_video"] = bool(remote_mp4) or bool(hls) or bool(embed)
+    video["has_video"] = bool(any_mp4) or bool(hls) or bool(embed)
 
 
 def parse_video_page(html: str, url: str) -> dict[str, Any]:
