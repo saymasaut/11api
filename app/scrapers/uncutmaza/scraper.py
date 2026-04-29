@@ -484,6 +484,50 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
 
+    # Preferred parser for current UncutMaza theme:
+    # - thumbnail card node: .video.lazy-bg (href/title/data-bg)
+    # - duration node: .time.clock
+    for card in soup.select(".video.lazy-bg"):
+        if len(items) >= limit:
+            break
+
+        href = _normalize_video_href((card.get("href") or "").strip())
+        if not href or href in seen:
+            continue
+
+        title = _clean_title((card.get("title") or "").strip()) or "Unknown Video"
+
+        thumb = (card.get("data-bg") or "").strip()
+        if not thumb:
+            style = (card.get("style") or "").strip()
+            m = re.search(r"background-image\s*:\s*url\((['\"]?)([^'\")]+)\1\)", style, flags=re.IGNORECASE)
+            if m:
+                thumb = m.group(2).strip()
+        if thumb.startswith("//"):
+            thumb = f"https:{thumb}"
+        thumb = thumb or None
+
+        duration = None
+        time_node = card.find_next(class_="time clock")
+        if time_node:
+            time_text = time_node.get_text(" ", strip=True)
+            dm = re.search(r"\b(?:\d{1,2}:){1,2}\d{2}\b", time_text)
+            if dm:
+                duration = dm.group(0)
+
+        seen.add(href)
+        items.append(
+            {
+                "url": href,
+                "title": title,
+                "thumbnail_url": thumb,
+                "duration": duration,
+                "views": None,
+                "uploader_name": None,
+            }
+        )
+
+    # Fallback parser for alternate layouts.
     for a in soup.select("a[href]"):
         if len(items) >= limit:
             break
