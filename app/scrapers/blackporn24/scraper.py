@@ -343,18 +343,37 @@ async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Op
     }
 
     async def _attempt(url: str, method: str, range_hdr: Optional[str]) -> Optional[str]:
-        h = dict(headers)
-        if range_hdr:
-            h["Range"] = range_hdr
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
-            if method == "HEAD":
-                resp = await client.head(url, headers=h)
-            else:
-                resp = await client.get(url, headers=h)
-        if resp.status_code in (301, 302, 303, 307, 308):
-            loc = resp.headers.get("Location")
-            if loc and "remote_control.php" in loc:
-                return loc
+        """
+        Resolve a get_file URL to a final remote_control.php URL.
+
+        Some deployments redirect in multiple hops (e.g. get_file -> CDN -> remote_control.php),
+        so we follow a small number of redirect hops manually.
+        """
+
+        async def _one(u: str) -> Optional[httpx.Response]:
+            h = dict(headers)
+            if range_hdr:
+                h["Range"] = range_hdr
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+                if method == "HEAD":
+                    return await client.head(u, headers=h)
+                return await client.get(u, headers=h)
+
+        next_url = url
+        for _ in range(4):
+            resp = await _one(next_url)
+            if resp is None:
+                return None
+            if resp.status_code in (301, 302, 303, 307, 308):
+                loc = (resp.headers.get("Location") or "").strip()
+                if not loc:
+                    return None
+                if "remote_control.php" in loc:
+                    return loc
+                # Continue chasing redirects (support relative redirect targets).
+                next_url = urljoin(str(resp.url), loc)
+                continue
+            return None
         return None
 
     attempts = [
