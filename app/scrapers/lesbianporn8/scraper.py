@@ -184,10 +184,15 @@ def _detect_media_format(url: str) -> Optional[str]:
     low = (url or "").lower()
     path = urlparse(url).path.lower() if url else ""
     if "/get_file/" in low:
-        return "mp4"
-    if path.endswith(".m3u8"):
+        # Some pages link screenshots through /get_file/.../*.jpg — don't misclassify those as video.
+        if path.endswith(".m3u8") or path.endswith(".m3u8/"):
+            return "hls"
+        if path.endswith(".mp4") or path.endswith(".mp4/"):
+            return "mp4"
+        return None
+    if path.endswith(".m3u8") or path.endswith(".m3u8/"):
         return "hls"
-    if path.endswith(".mp4"):
+    if path.endswith(".mp4") or path.endswith(".mp4/"):
         return "mp4"
     return None
 
@@ -386,7 +391,9 @@ def _url_contains_video_id(url: str, video_id: str) -> bool:
     )
 
 
-async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, referer: str) -> None:
+async def _resolve_video_streams_to_remote_playable(
+    video: dict[str, Any], *, referer: str, get_file_referer: str | None = None
+) -> None:
     streams: list[dict[str, str]] = video.get("streams") or []
     get_file_mp4 = [s for s in streams if s.get("format") == "mp4" and "get_file" in (s.get("url") or "")]
     if not get_file_mp4:
@@ -394,7 +401,10 @@ async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, re
     video_id = _extract_video_id(referer)
 
     async def _resolve_one(stream: dict[str, str]) -> tuple[dict[str, str], Optional[str]]:
-        return stream, await _get_file_to_remote_playable(stream["url"], referer=referer)
+        resolved = await _get_file_to_remote_playable(
+            stream["url"], referer=(get_file_referer or referer)
+        )
+        return stream, resolved
 
     resolved_pairs = await asyncio.gather(*[_resolve_one(s) for s in get_file_mp4])
     for stream, resolved in resolved_pairs:
@@ -403,14 +413,17 @@ async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, re
                 streams.remove(stream)
                 continue
             stream["url"] = resolved
-        else:
-            streams.remove(stream)
+        # If we can't resolve the redirect here (bot protection / transient failures),
+        # keep the original get_file URL as a fallback: browsers/WebViews can still follow redirects.
 
     remote_mp4 = [s for s in streams if s.get("format") == "mp4" and "remote_control.php" in (s.get("url") or "")]
+    any_mp4 = next((s for s in streams if s.get("format") == "mp4"), None)
     hls = next((s for s in streams if s.get("format") == "hls"), None)
     embed = next((s for s in streams if s.get("format") == "embed"), None)
     if remote_mp4:
         video["default"] = remote_mp4[0]["url"]
+    elif any_mp4:
+        video["default"] = any_mp4["url"]
     elif hls:
         video["default"] = hls["url"]
     elif embed:
@@ -418,7 +431,7 @@ async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, re
     else:
         video["default"] = None
     video["hls"] = hls["url"] if hls else None
-    video["has_video"] = bool(remote_mp4) or bool(hls) or bool(embed)
+    video["has_video"] = bool(remote_mp4) or bool(any_mp4) or bool(hls) or bool(embed)
 
 
 def parse_video_page(html: str, url: str) -> dict[str, Any]:
@@ -491,7 +504,26 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
 async def scrape(url: str) -> dict[str, Any]:
     html = await fetch_page(url, referer=url)
     data = parse_video_page(html, url)
-    await _resolve_video_streams_to_remote_playable(data.get("video", {}), referer=url)
+
+    # If the main video page only yields embed URLs, try extracting streams from the embed page.
+    video = data.get("video") or {}
+    streams = video.get("streams") or []
+    has_direct = any(s.get("format") in ("mp4", "hls") for s in streams)
+    native_embed = _extract_native_embed_url(html, url)
+    if native_embed and not has_direct:
+        try:
+            embed_html = await fetch_page(native_embed, referer=url)
+            embed_soup = BeautifulSoup(embed_html, "lxml")
+            embed_video = _extract_streams(embed_soup, embed_html, native_embed)
+            extra_streams = embed_video.get("streams") or []
+            if extra_streams:
+                merged = streams + [s for s in extra_streams if s not in streams]
+                video.update(embed_video)
+                video["streams"] = merged
+        except Exception:
+            pass
+
+    await _resolve_video_streams_to_remote_playable(video, referer=url, get_file_referer=native_embed)
     return data
 
 
