@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
-import httpx
 from bs4 import BeautifulSoup
 
 from app.core.pool import fetch_html as pool_fetch_html
@@ -170,35 +168,6 @@ def _normalize_video_href(href: str) -> Optional[str]:
     return urlunparse(("https", "blackporn24.com", parsed.path.rstrip("/") + "/", "", "", ""))
 
 
-def _extract_inline_urls(html: str) -> list[str]:
-    unescaped = html.replace("\\/", "/").replace("\\u0026", "&")
-    urls: list[str] = []
-    for m in re.finditer(r"https?://[^\s\"'<>]+", unescaped, flags=re.IGNORECASE):
-        u = m.group(0).strip()
-        if u and _detect_media_format(u):
-            urls.append(u)
-    return list(dict.fromkeys(urls))
-
-
-def _detect_media_format(url: str) -> Optional[str]:
-    low = (url or "").lower()
-    path = urlparse(url).path.lower() if url else ""
-    if "remote_control.php" in low and (".mp4" in low or "file=%2fvideos%2f" in low):
-        return "mp4"
-    if "/get_file/" in low:
-        return "mp4"
-    if path.endswith(".m3u8"):
-        return "hls"
-    if path.endswith(".mp4"):
-        return "mp4"
-    return None
-
-
-def _is_preview_media_url(url: str) -> bool:
-    path = urlparse(url).path.lower() if url else ""
-    return "_preview.mp4" in path or path.endswith("/preview.mp4")
-
-
 def _is_probable_ad_iframe(src: str) -> bool:
     s = (src or "").lower()
     ad_hosts_or_markers = (
@@ -227,89 +196,9 @@ def _extract_native_embed_url(html: str, video_url: str) -> Optional[str]:
     return None
 
 
-def _stream_quality_from_url(url: str) -> str:
-    low = (url or "").lower()
-    if _is_preview_media_url(url):
-        return "preview"
-    q = re.search(r"([1-9]\d{2,3})p", low)
-    if q:
-        return f"{q.group(1)}p"
-    if _detect_media_format(url) == "hls":
-        return "adaptive"
-    return "source"
-
-
 def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str, Any]:
     streams: list[dict[str, str]] = []
     seen: set[str] = set()
-
-    def _add_stream(raw_url: str, *, quality_hint: Optional[str] = None) -> None:
-        u = (raw_url or "").strip()
-        if not u:
-            return
-        if u.startswith("//"):
-            u = f"https:{u}"
-        elif u.startswith("/"):
-            u = urljoin(video_url, u)
-        fmt = _detect_media_format(u)
-        if not u.startswith("http") or u in seen or not fmt:
-            return
-        seen.add(u)
-        streams.append({"url": u, "quality": quality_hint or _stream_quality_from_url(u), "format": fmt})
-
-    for a in soup.select("a[href]"):
-        href = (a.get("href") or "").strip()
-        if not href:
-            continue
-        if href.startswith("//"):
-            href = f"https:{href}"
-        elif href.startswith("/"):
-            href = urljoin(video_url, href)
-        fmt = _detect_media_format(href)
-        if href.startswith("http") and href not in seen and fmt:
-            seen.add(href)
-            streams.append({"url": href, "quality": _stream_quality_from_url(href), "format": fmt})
-
-    for video in soup.select("video"):
-        # Some pages set the media URL directly on the <video> tag (no <source> children).
-        direct_src = (video.get("src") or "").strip()
-        if direct_src:
-            _add_stream(direct_src)
-
-        for source in video.select("source[src]"):
-            src = (source.get("src") or "").strip()
-            if not src:
-                continue
-            if src.startswith("//"):
-                src = f"https:{src}"
-            elif src.startswith("/"):
-                src = urljoin(video_url, src)
-            fmt = _detect_media_format(src)
-            if not src.startswith("http") or src in seen or not fmt:
-                continue
-            seen.add(src)
-            streams.append({"url": src, "quality": _stream_quality_from_url(src), "format": fmt})
-
-    for src in _extract_inline_urls(html):
-        if src in seen:
-            continue
-        fmt = _detect_media_format(src)
-        if not fmt:
-            continue
-        seen.add(src)
-        streams.append({"url": src, "quality": _stream_quality_from_url(src), "format": fmt})
-
-    # KVS/kt_player pages often keep the MP4 in a JS flashvars object, sometimes with a prefix like:
-    # "function/0/https://.../get_file/...mp4/?br=..."
-    unescaped = html.replace("\\/", "/").replace("\\u0026", "&")
-    for m in re.finditer(r"\bvideo_url(?:_hd)?\s*:\s*'([^']+)'", unescaped, flags=re.IGNORECASE):
-        raw = m.group(1).strip()
-        if not raw:
-            continue
-        # If value is prefixed (e.g. "function/0/https://..."), keep only the URL part.
-        hm = re.search(r"(https?://[^\s\"'<>]+)", raw, flags=re.IGNORECASE)
-        candidate = hm.group(1) if hm else raw
-        _add_stream(candidate, quality_hint="source")
 
     for iframe in soup.select("iframe[src]"):
         src = (iframe.get("src") or "").strip()
@@ -329,208 +218,16 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
         seen.add(native_embed)
         streams.append({"url": native_embed, "quality": "blackporn24", "format": "embed"})
 
-    def _score(item: dict[str, str]) -> tuple[int, int]:
-        fmt = (item.get("format") or "").lower()
-        stream_url = item.get("url") or ""
-        qtxt = item.get("quality") or ""
-        q = re.search(r"(\d{3,4})", qtxt)
-        qnum = int(q.group(1)) if q else 0
-        if fmt == "mp4":
-            return (2, qnum) if _is_preview_media_url(stream_url) else (3, qnum)
-        if fmt == "hls":
-            return (2, qnum)
-        if fmt == "embed" and "blackporn24.com/embed/" in (item.get("url") or "").lower():
-            return (1, 1)
-        return (1, 0)
-
     uniq = list(dict.fromkeys((json.dumps(s, sort_keys=True) for s in streams)))
     materialized = [json.loads(s) for s in uniq]
-    materialized.sort(key=_score, reverse=True)
-
-    default_url = None
-    for preferred in ("mp4", "hls", "embed"):
-        m = next((s for s in materialized if s.get("format") == preferred), None)
-        if m:
-            default_url = m.get("url")
-            break
-
-    hls_url = next((s.get("url") for s in materialized if s.get("format") == "hls"), None)
+    materialized.sort(key=lambda s: ("blackporn24.com/embed/" in (s.get("url") or "").lower()), reverse=True)
+    default_url = materialized[0].get("url") if materialized else None
     return {
         "streams": materialized,
-        "hls": hls_url,
+        "hls": None,
         "default": default_url,
         "has_video": bool(materialized),
     }
-
-
-def _extract_flashvar_value(html: str, key: str) -> Optional[str]:
-    """
-    Extract a single-quoted flashvars value like: key: 'value'
-    Returns the raw string value (not URL-decoded).
-    """
-    if not html or not key:
-        return None
-    unescaped = html.replace("\\/", "/").replace("\\u0026", "&")
-    m = re.search(rf"\\b{re.escape(key)}\\s*:\\s*'([^']*)'", unescaped, flags=re.IGNORECASE)
-    return m.group(1).strip() if m else None
-
-
-def _apply_required_query_params(url: str, required: dict[str, str]) -> str:
-    if not required:
-        return url
-    p = urlparse(url)
-    q = dict(parse_qsl(p.query, keep_blank_values=True))
-    changed = False
-    for k, v in required.items():
-        if v and not q.get(k):
-            q[k] = v
-            changed = True
-    if not changed:
-        return url
-    return urlunparse((p.scheme, p.netloc, p.path, p.params, urlencode(q), p.fragment))
-
-
-async def _get_file_to_remote_playable(
-    get_file_url: str,
-    *,
-    referer: str,
-    license_code: Optional[str] = None,
-    rnd: Optional[str] = None,
-) -> Optional[str]:
-    original = (get_file_url or "").strip()
-    if not original:
-        return None
-    base_no_query = original.split("?", 1)[0].strip().rstrip("/")
-    ref = referer.strip() if referer.strip().startswith("http") else "https://blackporn24.com/"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-        "Referer": ref,
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-    required_params: dict[str, str] = {}
-    if license_code:
-        required_params["license_code"] = str(license_code)
-    if rnd:
-        required_params["rnd"] = str(rnd)
-
-    async def _attempt(url: str, method: str, range_hdr: Optional[str]) -> Optional[str]:
-        """
-        Resolve a get_file URL to a final remote_control.php URL.
-
-        Some deployments redirect in multiple hops (e.g. get_file -> CDN -> remote_control.php),
-        so we follow a small number of redirect hops manually.
-        """
-
-        async def _one(u: str) -> Optional[httpx.Response]:
-            h = dict(headers)
-            if range_hdr:
-                h["Range"] = range_hdr
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
-                if method == "HEAD":
-                    return await client.head(u, headers=h)
-                return await client.get(u, headers=h)
-
-        next_url = _apply_required_query_params(url, required_params)
-        for _ in range(4):
-            resp = await _one(next_url)
-            if resp is None:
-                return None
-            if resp.status_code in (301, 302, 303, 307, 308):
-                loc = (resp.headers.get("Location") or "").strip()
-                if not loc:
-                    return None
-                if "remote_control.php" in loc:
-                    return loc
-                # Continue chasing redirects (support relative redirect targets).
-                next_url = urljoin(str(resp.url), loc)
-                continue
-            return None
-        return None
-
-    attempts = [
-        (original, "HEAD", None),
-        (original, "GET", "bytes=0-"),
-        (original, "GET", "bytes=0-0"),
-        (f"{original.rstrip('/')}/", "HEAD", None),
-        (f"{original.rstrip('/')}/", "GET", "bytes=0-"),
-        (f"{original.rstrip('/')}/", "GET", "bytes=0-0"),
-        (f"{base_no_query}/", "HEAD", None),
-        (f"{base_no_query}/", "GET", "bytes=0-"),
-        (f"{base_no_query}/", "GET", "bytes=0-0"),
-        (base_no_query, "HEAD", None),
-        (base_no_query, "GET", "bytes=0-"),
-        (base_no_query, "GET", "bytes=0-0"),
-    ]
-    for u, method, rng in attempts:
-        try:
-            resolved = await asyncio.wait_for(_attempt(u, method, rng), timeout=16.0)
-            if resolved:
-                return resolved
-        except Exception:
-            continue
-    return None
-
-
-def _extract_video_id(url: str) -> Optional[str]:
-    m = re.search(r"/videos/(\d+)/", url or "", flags=re.IGNORECASE)
-    return m.group(1) if m else None
-
-
-def _url_contains_video_id(url: str, video_id: str) -> bool:
-    low = (url or "").lower()
-    vid = str(video_id).lower()
-    return (
-        f"/{vid}/" in low
-        or f"/{vid}." in low
-        or f"%2f{vid}%2f" in low
-        or f"%2f{vid}.mp4" in low
-    )
-
-
-async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, referer: str) -> None:
-    streams: list[dict[str, str]] = video.get("streams") or []
-    get_file_mp4 = [s for s in streams if s.get("format") == "mp4" and "get_file" in (s.get("url") or "")]
-    if not get_file_mp4:
-        return
-    video_id = _extract_video_id(referer)
-    license_code = video.get("license_code")
-    rnd = video.get("rnd")
-
-    async def _resolve_one(stream: dict[str, str]) -> tuple[dict[str, str], Optional[str]]:
-        resolved = await _get_file_to_remote_playable(
-            stream["url"],
-            referer=referer,
-            license_code=str(license_code) if license_code else None,
-            rnd=str(rnd) if rnd else None,
-        )
-        return stream, resolved
-
-    resolved_pairs = await asyncio.gather(*[_resolve_one(s) for s in get_file_mp4])
-    for stream, resolved in resolved_pairs:
-        if resolved:
-            if video_id and not _url_contains_video_id(resolved, video_id):
-                streams.remove(stream)
-                continue
-            stream["url"] = resolved
-        else:
-            streams.remove(stream)
-
-    remote_mp4 = [s for s in streams if s.get("format") == "mp4" and "remote_control.php" in (s.get("url") or "")]
-    hls = next((s for s in streams if s.get("format") == "hls"), None)
-    embed = next((s for s in streams if s.get("format") == "embed"), None)
-
-    if remote_mp4:
-        video["default"] = remote_mp4[0]["url"]
-    elif hls:
-        video["default"] = hls["url"]
-    elif embed:
-        video["default"] = embed["url"]
-    else:
-        video["default"] = None
-
-    video["hls"] = hls["url"] if hls else None
-    video["has_video"] = bool(remote_mp4) or bool(hls) or bool(embed)
 
 
 def parse_video_page(html: str, url: str) -> dict[str, Any]:
@@ -594,8 +291,6 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
             description = m.group(1).strip()
 
     video = _extract_streams(soup, html, url)
-    license_code = _extract_flashvar_value(html, "license_code")
-    rnd = _extract_flashvar_value(html, "rnd")
     tags = list(dict.fromkeys([t for t in tags if t]))
 
     return {
@@ -612,16 +307,12 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
         "video": video,
         "related_videos": [],
         "preview_url": None,
-        # Keep these for get_file -> remote_control resolving on some KVS deployments.
-        "license_code": license_code,
-        "rnd": rnd,
     }
 
 
 async def scrape(url: str) -> dict[str, Any]:
     html = await fetch_page(url, referer=url)
     data = parse_video_page(html, url)
-    await _resolve_video_streams_to_remote_playable(data.get("video", {}), referer=url)
     return data
 
 
