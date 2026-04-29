@@ -10,10 +10,44 @@ from bs4 import BeautifulSoup
 
 from app.core.pool import fetch_html as pool_fetch_html
 
+# Live content is served on uncutmazaa.com. uncutmaza.com redirects to uncutmaza.cc which often
+# returns Cloudflare 403 for automated clients — rewrite those hosts to uncutmazaa.com for fetches.
+CANONICAL_HOST = "uncutmazaa.com"
+_REGISTRY_HOSTS = frozenset({"uncutmazaa.com", "uncutmaza.com", "uncutmaza.cc"})
+
+
+def _registry_host(netloc: str) -> str:
+    n = (netloc or "").lower().split(":")[0]
+    return re.sub(r"^www\.", "", n)
+
 
 def can_handle(host: str) -> bool:
-    h = (host or "").lower()
-    return h == "uncutmaza.com" or h.endswith(".uncutmaza.com")
+    h = _registry_host(host or "")
+    return h in _REGISTRY_HOSTS
+
+
+def _rewrite_to_canonical_fetch_url(url: str) -> str:
+    raw = (url or "").strip()
+    if not raw.startswith("http"):
+        raw = "https://" + raw.lstrip("/")
+    parsed = urlparse(raw)
+    rh = _registry_host(parsed.netloc)
+    if rh in ("uncutmaza.com", "uncutmaza.cc"):
+        return urlunparse(
+            ("https", CANONICAL_HOST, parsed.path or "/", parsed.params, parsed.query, parsed.fragment)
+        )
+    if rh == "uncutmazaa.com":
+        return urlunparse(
+            ("https", CANONICAL_HOST, parsed.path or "/", parsed.params, parsed.query, parsed.fragment)
+        )
+    return raw
+
+
+def _normalize_list_netloc(netloc: str) -> str:
+    rh = _registry_host(netloc)
+    if rh in _REGISTRY_HOSTS:
+        return CANONICAL_HOST
+    return CANONICAL_HOST
 
 
 def get_categories() -> list[dict]:
@@ -27,13 +61,14 @@ def get_categories() -> list[dict]:
 
 
 async def fetch_page(url: str) -> str:
+    fetch_url = _rewrite_to_canonical_fetch_url(url)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://uncutmaza.com/",
+        "Referer": f"https://{CANONICAL_HOST}/",
     }
-    return await pool_fetch_html(url, headers=headers)
+    return await pool_fetch_html(fetch_url, headers=headers)
 
 
 def _first_non_empty(*values: Optional[str]) -> Optional[str]:
@@ -200,12 +235,12 @@ def _normalize_video_href(href: str) -> Optional[str]:
     if href.startswith("//"):
         href = f"https:{href}"
     elif href.startswith("/"):
-        href = f"https://uncutmaza.com{href}"
+        href = f"https://{CANONICAL_HOST}{href}"
     if not href.startswith("http"):
         return None
 
     parsed = urlparse(href)
-    if "uncutmaza.com" not in parsed.netloc.lower():
+    if _registry_host(parsed.netloc) not in _REGISTRY_HOSTS:
         return None
     if any(
         x in parsed.path.lower()
@@ -217,7 +252,7 @@ def _normalize_video_href(href: str) -> Optional[str]:
     if not _is_probable_video_post(parsed):
         return None
     slug = parsed.path.strip("/").split("/", 1)[0]
-    return urlunparse(("https", "uncutmaza.com", f"/{slug}/", "", "", ""))
+    return urlunparse(("https", CANONICAL_HOST, f"/{slug}/", "", "", ""))
 
 
 def _extract_inline_urls(html: str) -> list[str]:
@@ -234,7 +269,7 @@ def _extract_inline_urls(html: str) -> list[str]:
     return list(dict.fromkeys(urls))
 
 
-def _normalize_media_url(src: str, base: str = "https://uncutmaza.com/") -> Optional[str]:
+def _normalize_media_url(src: str, base: str = f"https://{CANONICAL_HOST}/") -> Optional[str]:
     u = (src or "").strip()
     if not u:
         return None
@@ -416,7 +451,7 @@ def _build_list_page_url(base_url: str, page: int) -> str:
         raw = "https://" + raw.lstrip("/")
     parsed = urlparse(raw)
     scheme = parsed.scheme or "https"
-    netloc = parsed.netloc or "uncutmaza.com"
+    netloc = _normalize_list_netloc(parsed.netloc)
     path = parsed.path or "/"
     query_items = dict(parse_qsl(parsed.query, keep_blank_values=True))
 

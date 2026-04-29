@@ -651,21 +651,25 @@ curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://viralkand.com/<vide
 
 ## UncutMaza Implementation Notes
 
-[UncutMaza](https://uncutmaza.com/) is a WordPress-style clip index focused on episodic posts. The homepage exposes recent post cards with title links, relative publish-time labels, and duration-like badges (`mm:ss`) directly in listing text.
+[UncutMaza](https://uncutmazaa.com/) is a WordPress-style clip index focused on episodic posts. The homepage exposes recent post cards with title links, relative publish-time labels, and duration-like badges (`mm:ss`) directly in listing text.
+
+**Note:** `uncutmaza.com` redirects toward `uncutmaza.cc`, which often returns Cloudflare **403** to automated clients. The scraper rewrites `uncutmaza.com` / `uncutmaza.cc` requests to **`uncutmazaa.com`** (live HTML) before fetching.
 
 Use `viralkand`, `mmsbro`, and `bollywoodmaal` as close implementation references.
 
 ### Host aliases
 
-- `uncutmaza.com`
-- `www.uncutmaza.com`
+- `uncutmazaa.com` (canonical fetch host)
+- `uncutmaza.com` / `uncutmaza.cc` (accepted; rewritten for HTTP fetch)
 
 Example:
 
 ```python
 def can_handle(host: str) -> bool:
-    h = (host or "").lower()
-    return h == "uncutmaza.com" or h.endswith(".uncutmaza.com")
+    h = (host or "").lower().split(":")[0]
+    if h.startswith("www."):
+        h = h[4:]
+    return h in ("uncutmazaa.com", "uncutmaza.com", "uncutmaza.cc")
 ```
 
 ### Listing and pagination (`list_videos`)
@@ -684,9 +688,9 @@ Recommended list strategy:
 
 Useful list base URLs:
 
-- `https://uncutmaza.com/`
-- `https://uncutmaza.com/category/<category-slug>/` (if category archives are used)
-- `https://uncutmaza.com/?s=<query>` (if search query route is used)
+- `https://uncutmazaa.com/`
+- `https://uncutmazaa.com/category/<category-slug>/` (if category archives are used)
+- `https://uncutmazaa.com/?s=<query>` (if search query route is used)
 
 ### Metadata and streams (`scrape`)
 
@@ -743,13 +747,13 @@ If request URL validation still uses explicit host allowlists in your branch, al
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
   -H "Content-Type: application/json" \
-  -d "{\"url\":\"https://uncutmaza.com/kya-khoob-lagti-ho-episode-6/\"}"
+  -d "{\"url\":\"https://uncutmazaa.com/kya-khoob-lagti-ho-episode-6/\"}"
 
-curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://uncutmaza.com/&page=1&limit=20"
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://uncutmazaa.com/&page=1&limit=20"
 
 curl "http://127.0.0.1:8000/api/v1/categories?source=uncutmaza"
 
-curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://uncutmaza.com/kya-khoob-lagti-ho-episode-6/"
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://uncutmazaa.com/kya-khoob-lagti-ho-episode-6/"
 ```
 
 ## Blowjobs.pro Implementation Notes
