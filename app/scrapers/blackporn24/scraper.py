@@ -183,6 +183,8 @@ def _extract_inline_urls(html: str) -> list[str]:
 def _detect_media_format(url: str) -> Optional[str]:
     low = (url or "").lower()
     path = urlparse(url).path.lower() if url else ""
+    if "remote_control.php" in low and (".mp4" in low or "file=%2fvideos%2f" in low):
+        return "mp4"
     if "/get_file/" in low:
         return "mp4"
     if path.endswith(".m3u8"):
