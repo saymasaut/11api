@@ -649,6 +649,109 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=viralkand"
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://viralkand.com/<video-post-slug>/"
 ```
 
+## UncutMaza Implementation Notes
+
+[UncutMaza](https://uncutmaza.com/) is a WordPress-style clip index focused on episodic posts. The homepage exposes recent post cards with title links, relative publish-time labels, and duration-like badges (`mm:ss`) directly in listing text.
+
+Use `viralkand`, `mmsbro`, and `bollywoodmaal` as close implementation references.
+
+### Host aliases
+
+- `uncutmaza.com`
+- `www.uncutmaza.com`
+
+Example:
+
+```python
+def can_handle(host: str) -> bool:
+    h = (host or "").lower()
+    return h == "uncutmaza.com" or h.endswith(".uncutmaza.com")
+```
+
+### Listing and pagination (`list_videos`)
+
+Recommended list strategy:
+
+- Parse candidate detail links from post-card anchors in the primary content grid.
+- Keep only same-domain post URLs and skip utility/legal paths when present (`/contact`, `/privacy-policy`, `/dmca`, `/18-u-s-c-2257`, tag/category roots without concrete post slugs).
+- Prefer metadata in this order:
+  - title: card heading anchor text, then anchor `title`, then image `alt`
+  - thumbnail: `data-src`, `data-lazy-src`, `data-original`, first `srcset` entry, then `src`
+  - duration: parse `mm:ss` or `hh:mm:ss` from card text (many homepage entries expose `20:00`-style values)
+  - views/uploader: optional (`None` if unavailable in card markup)
+- Page 1 should use `base_url` unchanged.
+- For page > 1, follow visible pager links first (WordPress commonly uses `/page/{n}/`). If no pager can be inferred, fallback to `?paged={n}` while preserving existing query params.
+
+Useful list base URLs:
+
+- `https://uncutmaza.com/`
+- `https://uncutmaza.com/category/<category-slug>/` (if category archives are used)
+- `https://uncutmaza.com/?s=<query>` (if search query route is used)
+
+### Metadata and streams (`scrape`)
+
+For detail pages:
+
+- Metadata fallback order:
+  1. `og:title`, `og:description`, `og:image`
+  2. `twitter:title`, `twitter:description`, `twitter:image`
+  3. JSON-LD `VideoObject`
+  4. visible `h1` / page `<title>`
+- Stream extraction order:
+  - `<video src>` and `<video><source src>`
+  - inline script URLs matching `.mp4` or `.m3u8`
+  - iframe embeds as fallback
+- Unescape script URLs before using them (`\\/` -> `/`, `\\u0026` -> `&`).
+- Build `video.streams` with:
+  - direct media: `format="mp4"` / `format="hls"`
+  - embeds: `format="embed"` and quality labels (`Server 1`, `Server 2`, ...)
+- Set `video.default` preference:
+  1. highest-priority direct MP4
+  2. HLS URL
+  3. first playable embed
+
+If a detail page only exposes embedded players, return embed streams rather than manufacturing direct media URLs.
+
+### Categories (`get_categories`)
+
+Seed `categories.json` from the site's visible category navigation/archive list. Keep schema aligned with existing scraper folders so `/api/v1/categories?source=uncutmaza` returns valid `CategoryItem` entries.
+
+### Registration checklist for UncutMaza
+
+Besides creating `backend/app/scrapers/uncutmaza/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=uncutmaza`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host/unsupported-host help text
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### UncutMaza verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://uncutmaza.com/kya-khoob-lagti-ho-episode-6/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://uncutmaza.com/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=uncutmaza"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://uncutmaza.com/kya-khoob-lagti-ho-episode-6/"
+```
+
 ## Blowjobs.pro Implementation Notes
 
 ## DesiPorn.one Implementation Notes
