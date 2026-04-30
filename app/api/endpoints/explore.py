@@ -276,7 +276,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://indianporn365.xyz/",
         nickname="IndianPorn365",
-        favicon="https://indianporn365.xyz/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/indianporn.png",
         accentColor="#E64A19",
         category="porn",
         isVerified=False,
@@ -289,7 +289,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://mmsbro.com/",
         nickname="MMSBro",
-        favicon="https://mmsbro.com/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/mmsbro.png",
         accentColor="#D81B60",
         category="porn",
         isVerified=False,
@@ -302,7 +302,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://www.thekamababa.com/",
         nickname="KamaBaba",
-        favicon="https://www.thekamababa.com/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/kamababa.webp",
         accentColor="#E53935",
         category="porn",
         isVerified=False,
@@ -315,7 +315,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://www.desimms2.site/",
         nickname="DesiMMS2",
-        favicon="https://www.desimms2.site/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/dasimms2.png",
         accentColor="#E91E63",
         category="porn",
         isVerified=False,
@@ -328,7 +328,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://thotsporn.com/",
         nickname="ThotsPorn",
-        favicon="https://thotsporn.com/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/thotsporn.png",
         accentColor="#EC407A",
         category="porn",
         isVerified=False,
@@ -341,7 +341,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://leakedamateurporn.xyz/",
         nickname="LeakedAmateurPorn",
-        favicon="https://leakedamateurporn.xyz/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/cropped-leaked-amateur-porn.png",
         accentColor="#EC407A",
         category="porn",
         isVerified=False,
@@ -354,7 +354,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://zeenite.com/",
         nickname="Zeenite",
-        favicon="https://zeenite.com/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/zeenite.ico",
         accentColor="#8E24AA",
         category="porn",
         isVerified=False,
@@ -367,7 +367,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://uncutmazaa.com/",
         nickname="UncutMaza",
-        favicon="https://uncutmazaa.com/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/cropped-UncutMaza.png",
         accentColor="#C2185B",
         category="porn",
         isVerified=False,
@@ -380,7 +380,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://desiporn.one/",
         nickname="DesiPorn",
-        favicon="https://desiporn.one/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/dasiporn.ico",
         accentColor="#D81B60",
         category="porn",
         isVerified=False,
@@ -419,7 +419,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://lesbianporn8.net/",
         nickname="LesbianPorn8",
-        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/lesbianporn8.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/lesbianporn.png",
         accentColor="#AB47BC",
         category="porn",
         isVerified=False,
@@ -432,7 +432,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://milfporn8.net/",
         nickname="MILFPorn8",
-        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/milfporn8.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/milf8.png",
         accentColor="#8D6E63",
         category="porn",
         isVerified=False,
