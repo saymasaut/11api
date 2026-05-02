@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query
 
 from app.core import cache
 from app.models.sports_models import SportsDataPayload, SportsDataResponse
@@ -16,8 +16,6 @@ router = APIRouter()
 SPORTS_SOURCE_URL = "https://gbplayer.cc/data/app.json"
 SPORTS_DATA_BASE_URL = "https://gbplayer.cc/data/"
 SPORTS_CACHE_KEY = "sports:data:decoded"
-SPORTS_LOGO_CACHE_KEY_PREFIX = "sports:logo:proxy:"
-SPORTS_LOGO_ALLOWED_HOSTS = ("img.sofascore.com",)
 
 _PLAIN_ALPHA = "aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ"
 _CODED_ALPHA = "fFgGjJkKaApPbBmMoOzZeEnNcCdDrRqQtTvVuUxXhHiIwWyYlLsS"
@@ -234,17 +232,6 @@ def _decode_to_urls(decoded: Any) -> list[str]:
     return _filter_stream_urls(out)
 
 
-def _is_safe_logo_url(value: str) -> bool:
-    try:
-        parsed = httpx.URL(value.strip())
-    except Exception:
-        return False
-    if parsed.scheme not in ("http", "https"):
-        return False
-    host = (parsed.host or "").lower()
-    return host in SPORTS_LOGO_ALLOWED_HOSTS
-
-
 async def _build_sports_payload() -> SportsDataPayload:
     async with httpx.AsyncClient(timeout=20.0) as client:
         res = await client.get(
@@ -308,84 +295,6 @@ async def get_sports_data() -> SportsDataResponse:
     response = SportsDataResponse(data=payload)
     await cache.set(SPORTS_CACHE_KEY, response.model_dump(), ttl_seconds=300)
     return response
-
-
-@router.get("/sports/logo", tags=["Sports"])
-async def get_sports_logo(url: str = Query(..., description="Absolute upstream logo URL")) -> Response:
-    absolute = url.strip()
-    if not absolute:
-        raise HTTPException(status_code=400, detail="Missing logo url")
-    if not _is_safe_logo_url(absolute):
-        raise HTTPException(status_code=400, detail="Unsupported logo host")
-
-    cache_key = f"{SPORTS_LOGO_CACHE_KEY_PREFIX}{absolute}"
-    cached = await cache.get(cache_key)
-    if isinstance(cached, dict):
-        body = cached.get("body")
-        if isinstance(body, (bytes, bytearray)):
-            return Response(
-                content=bytes(body),
-                media_type=str(cached.get("content_type") or "image/png"),
-                headers={
-                    "Cache-Control": "public, max-age=21600",
-                    "Access-Control-Allow-Origin": "*",
-                },
-            )
-
-    header_profiles: list[dict[str, str]] = [
-        {
-            "User-Agent": (
-                "Mozilla/5.0 (Linux; Android 13; SM-A315F) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Mobile Safari/537.36"
-            ),
-            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-            "Referer": "https://www.sofascore.com/",
-            "Origin": "https://www.sofascore.com",
-            "Connection": "keep-alive",
-        },
-        {
-            "User-Agent": "okhttp/4.12.0",
-            "Accept": "image/*,*/*;q=0.8",
-            "Connection": "Keep-Alive",
-        },
-    ]
-
-    try:
-        upstream: httpx.Response | None = None
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            for headers in header_profiles:
-                resp = await client.get(absolute, headers=headers)
-                if resp.status_code == 200:
-                    upstream = resp
-                    break
-                upstream = resp
-        if upstream is None:
-            raise HTTPException(status_code=502, detail="No upstream logo response")
-        if upstream.status_code != 200:
-            raise HTTPException(
-                status_code=upstream.status_code,
-                detail=f"Upstream logo denied request (HTTP {upstream.status_code})",
-            )
-        content_type = (upstream.headers.get("content-type") or "image/png").split(";")[0].strip()
-        body = upstream.content
-        await cache.set(
-            cache_key,
-            {"body": body, "content_type": content_type},
-            ttl_seconds=21600,
-        )
-        return Response(
-            content=body,
-            media_type=content_type,
-            headers={
-                "Cache-Control": "public, max-age=21600",
-                "Access-Control-Allow-Origin": "*",
-            },
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch sports logo: {exc}") from exc
 
 
 @router.get("/sports/resolve-link", tags=["Sports"])
