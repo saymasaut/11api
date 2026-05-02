@@ -332,24 +332,41 @@ async def get_sports_logo(url: str = Query(..., description="Absolute upstream l
                 },
             )
 
+    header_profiles: list[dict[str, str]] = [
+        {
+            "User-Agent": (
+                "Mozilla/5.0 (Linux; Android 13; SM-A315F) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Mobile Safari/537.36"
+            ),
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            "Referer": "https://www.sofascore.com/",
+            "Origin": "https://www.sofascore.com",
+            "Connection": "keep-alive",
+        },
+        {
+            "User-Agent": "okhttp/4.12.0",
+            "Accept": "image/*,*/*;q=0.8",
+            "Connection": "Keep-Alive",
+        },
+    ]
+
     try:
+        upstream: httpx.Response | None = None
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            upstream = await client.get(
-                absolute,
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Linux; Android 13; SM-A315F) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/124.0.0.0 Mobile Safari/537.36"
-                    ),
-                    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-                    "Referer": "https://www.sofascore.com/",
-                    "Origin": "https://www.sofascore.com",
-                    "Connection": "keep-alive",
-                },
-            )
+            for headers in header_profiles:
+                resp = await client.get(absolute, headers=headers)
+                if resp.status_code == 200:
+                    upstream = resp
+                    break
+                upstream = resp
+        if upstream is None:
+            raise HTTPException(status_code=502, detail="No upstream logo response")
         if upstream.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"Upstream logo HTTP {upstream.status_code}")
+            raise HTTPException(
+                status_code=upstream.status_code,
+                detail=f"Upstream logo denied request (HTTP {upstream.status_code})",
+            )
         content_type = (upstream.headers.get("content-type") or "image/png").split(";")[0].strip()
         body = upstream.content
         await cache.set(
