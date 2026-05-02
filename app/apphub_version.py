@@ -1,11 +1,11 @@
 # AppHub Version Configuration
 # Update this file when you release a new version of AppHub
 
-VERSION = "8.0.0"
-BUILD_NUMBER = 8
+VERSION = "9.0.0"
+BUILD_NUMBER = 2009
 # Force all builds older than the current release to update.
 MIN_SUPPORTED_BUILD = BUILD_NUMBER
-RELEASE_DATE = "2026-04-23"
+RELEASE_DATE = "2026-04-30"
 
 # File Information
 DOWNLOAD_URLS = {
@@ -36,17 +36,11 @@ TELEGRAM_CHANNEL = "https://t.me/+IDEuHZyD9lc5Y2Jl"
 CHANGELOG_TITLE = "🎉 What's New in v8.0.0"
 CHANGELOG = """
 ✨ Major Features
-• Upgraded ecosystem for handling more websites
-• Added hentaiser website support
-• New Settings UI/UX with additional features
-• Added sports live section
-• Added more new channels to the Media section
-• Added casting support
-• Player UI changes
+• Added 14+ New website support
+• Downloads and Favorite ui Update
 
 🛠️ Bug Fixes & Enhancements
-• Fixed streaming on Xmoviesforyou
-• Fixed lag and volume issues on live channels
-• Disabled pimpbunny due to Cloudflare issues
-• Many other unlisted improvements
+• Player Controller black mask removed
+• XXXParodyHD server change to streamtape
+• Many more not on the list
 """
