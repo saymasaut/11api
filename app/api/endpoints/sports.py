@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import base64
 import json
-import mimetypes
 import re
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import Response
 
 from app.core import cache
 from app.models.sports_models import SportsDataPayload, SportsDataResponse
@@ -19,11 +16,6 @@ router = APIRouter()
 SPORTS_SOURCE_URL = "https://gbplayer.cc/data/app.json"
 SPORTS_DATA_BASE_URL = "https://gbplayer.cc/data/"
 SPORTS_CACHE_KEY = "sports:data:decoded"
-SPORTS_LOGO_PROXY_TTL_SECONDS = 60 * 60 * 24
-_SOFASCORE_LOGO_ALLOWED_HOST_SUFFIXES = (
-    "sofascore.com",
-    "sofascore.app",
-)
 
 _PLAIN_ALPHA = "aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ"
 _CODED_ALPHA = "fFgGjJkKaApPbBmMoOzZeEnNcCdDrRqQtTvVuUxXhHiIwWyYlLsS"
@@ -169,27 +161,6 @@ def _to_absolute_data_url(value: str) -> str:
     if link.startswith("http://") or link.startswith("https://"):
         return link
     return f"{SPORTS_DATA_BASE_URL}{link.lstrip('/')}"
-
-
-def _is_allowed_logo_url(url: str) -> bool:
-    parsed = urlparse(url.strip())
-    if parsed.scheme != "https":
-        return False
-    host = (parsed.hostname or "").lower()
-    if not host:
-        return False
-    return any(host == suffix or host.endswith(f".{suffix}") for suffix in _SOFASCORE_LOGO_ALLOWED_HOST_SUFFIXES)
-
-
-def _pick_logo_content_type(content_type_header: str | None, source_url: str) -> str:
-    if content_type_header:
-        raw = content_type_header.split(";", 1)[0].strip().lower()
-        if raw.startswith("image/"):
-            return raw
-    guessed, _ = mimetypes.guess_type(source_url)
-    if guessed and guessed.startswith("image/"):
-        return guessed
-    return "image/webp"
 
 
 def _normalize_map_links(item: dict[str, Any]) -> dict[str, Any]:
@@ -453,60 +424,3 @@ async def get_sports_channels(url: str = Query(..., description="Channels json u
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to load channels: {exc}") from exc
-
-
-@router.get("/sports/logo", tags=["Sports"])
-async def proxy_sports_logo(url: str = Query(..., description="Sofascore logo URL")) -> Response:
-    absolute = url.strip()
-    if not _is_allowed_logo_url(absolute):
-        raise HTTPException(status_code=400, detail="Only https Sofascore logo URLs are allowed")
-
-    cache_key = f"sports:logo:{absolute}"
-    cached = await cache.get(cache_key)
-    if isinstance(cached, dict):
-        cached_body = cached.get("body")
-        cached_content_type = str(cached.get("content_type") or "")
-        if isinstance(cached_body, (bytes, bytearray)) and cached_content_type.startswith("image/"):
-            return Response(
-                content=bytes(cached_body),
-                media_type=cached_content_type,
-                headers={
-                    "Cache-Control": f"public, max-age={SPORTS_LOGO_PROXY_TTL_SECONDS}, s-maxage={SPORTS_LOGO_PROXY_TTL_SECONDS}",
-                },
-            )
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(
-                absolute,
-                headers={
-                    "User-Agent": "okhttp/4.12.0",
-                    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-                    "Accept-Encoding": "gzip",
-                    "Connection": "Keep-Alive",
-                },
-            )
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch upstream logo: {exc}") from exc
-
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Upstream logo HTTP {resp.status_code}")
-
-    content_type = _pick_logo_content_type(resp.headers.get("content-type"), absolute)
-    body = resp.content
-    if not body:
-        raise HTTPException(status_code=502, detail="Upstream logo response was empty")
-
-    await cache.set(
-        cache_key,
-        {"body": body, "content_type": content_type},
-        ttl_seconds=SPORTS_LOGO_PROXY_TTL_SECONDS,
-    )
-
-    return Response(
-        content=body,
-        media_type=content_type,
-        headers={
-            "Cache-Control": f"public, max-age={SPORTS_LOGO_PROXY_TTL_SECONDS}, s-maxage={SPORTS_LOGO_PROXY_TTL_SECONDS}",
-        },
-    )
