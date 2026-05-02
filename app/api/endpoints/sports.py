@@ -4,9 +4,10 @@ import base64
 import json
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from app.core import cache
 from app.models.sports_models import SportsDataPayload, SportsDataResponse
@@ -16,6 +17,7 @@ router = APIRouter()
 SPORTS_SOURCE_URL = "https://gbplayer.cc/data/app.json"
 SPORTS_DATA_BASE_URL = "https://gbplayer.cc/data/"
 SPORTS_CACHE_KEY = "sports:data:decoded"
+SPORTS_IMAGE_ALLOWED_HOSTS = {"img.sofascore.com"}
 
 _PLAIN_ALPHA = "aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ"
 _CODED_ALPHA = "fFgGjJkKaApPbBmMoOzZeEnNcCdDrRqQtTvVuUxXhHiIwWyYlLsS"
@@ -424,3 +426,49 @@ async def get_sports_channels(url: str = Query(..., description="Channels json u
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to load channels: {exc}") from exc
+
+
+@router.get("/sports/image-proxy", tags=["Sports"])
+async def sports_image_proxy(url: str = Query(..., description="External sports image URL")) -> Response:
+    absolute = url.strip()
+    if not absolute.startswith("http://") and not absolute.startswith("https://"):
+        raise HTTPException(status_code=400, detail="Only http/https image URLs are allowed")
+
+    parsed = urlparse(absolute)
+    host = (parsed.hostname or "").lower()
+    if not host:
+        raise HTTPException(status_code=400, detail="Invalid image URL")
+    if host not in SPORTS_IMAGE_ALLOWED_HOSTS and not host.endswith(".sofascore.com"):
+        raise HTTPException(status_code=400, detail="Image host is not allowed")
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            upstream = await client.get(
+                absolute,
+                headers={
+                    "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 15; AppHub Build/1.0)",
+                    "Accept": "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                    "Accept-Encoding": "gzip",
+                    "Connection": "Keep-Alive",
+                },
+            )
+
+        if upstream.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"Image upstream HTTP {upstream.status_code}")
+
+        content_type = upstream.headers.get("content-type", "image/webp")
+        if not content_type.lower().startswith("image/"):
+            raise HTTPException(status_code=502, detail="Upstream did not return image content")
+
+        return Response(
+            content=upstream.content,
+            media_type=content_type,
+            headers={
+                "Cache-Control": "public, max-age=86400",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to proxy image: {exc}") from exc
