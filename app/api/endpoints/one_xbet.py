@@ -298,6 +298,10 @@ def _build_payload_from_live_html(html: str) -> OneXbetDataPayload:
         league_match = re.search(r"/en/live/[^/]+/([^/]+)/\d+-", href)
         if league_match:
             league = league_match.group(1).replace("-", " ").strip()
+        sport = ""
+        sport_match = re.search(r"/en/live/([^/]+)/", href)
+        if sport_match:
+            sport = sport_match.group(1).replace("-", " ").strip()
 
         events.append(
             {
@@ -306,6 +310,7 @@ def _build_payload_from_live_html(html: str) -> OneXbetDataPayload:
                 "title": title,
                 "eventName": title,
                 "league": league or "Live",
+                "sport": sport,
                 "status": "live",
                 "stream_url": absolute_url,
                 "source": "live-page-fallback",
@@ -393,6 +398,10 @@ def _build_payload_from_dashboard_cards(html: str) -> OneXbetDataPayload:
         league_match = re.search(r"/en/live/[^/]+/([^/]+)/\d+-", href)
         if league_match:
             league = league_match.group(1).replace("-", " ").strip()
+        sport = ""
+        sport_match = re.search(r"/en/live/([^/]+)/", href)
+        if sport_match:
+            sport = sport_match.group(1).replace("-", " ").strip()
 
         title = f"{home} vs {away}".strip() if (home or away) else "Live match"
 
@@ -407,6 +416,7 @@ def _build_payload_from_dashboard_cards(html: str) -> OneXbetDataPayload:
                 "teamAScore": home_score,
                 "teamBScore": away_score,
                 "league": league or "Live",
+                "sport": sport,
                 "status": "live",
                 "status_text": status,
                 "odd1": odd1,
