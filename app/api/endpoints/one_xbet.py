@@ -388,7 +388,16 @@ async def get_one_xbet_live_data() -> OneXbetDataResponse:
             fallback = OneXbetDataResponse.model_validate(last_good)
             fallback.status = "degraded-cache"
             return fallback
-        raise
+        # Cold start with no cache: return empty successful payload instead of 502.
+        return OneXbetDataResponse(
+            status="degraded-empty",
+            data=OneXbetDataPayload(
+                events=[],
+                categories=[],
+                highlights=[],
+                source_url=ONE_XBET_SITE_URL,
+            ),
+        )
 
 
 async def _get_cached_or_build_payload() -> OneXbetDataPayload:
@@ -407,7 +416,12 @@ async def _get_cached_or_build_payload() -> OneXbetDataPayload:
         last_good = await cache.get(ONE_XBET_LAST_GOOD_CACHE_KEY)
         if last_good:
             return OneXbetDataResponse.model_validate(last_good).data
-        raise
+        return OneXbetDataPayload(
+            events=[],
+            categories=[],
+            highlights=[],
+            source_url=ONE_XBET_SITE_URL,
+        )
 
 
 @router.get("/1xbet/resolve-link", tags=["1XBet"])
@@ -490,9 +504,23 @@ async def resolve_one_xbet_link(
             "isResolved": True,
         }
     except HTTPException:
-        raise
+        # Avoid hard 502 in client; return empty resolved shape.
+        return {
+            "status": "degraded-empty",
+            "url": absolute,
+            "urls": [],
+            "resolved_url": None,
+            "isResolved": False,
+        }
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to resolve 1XBet link: {exc}") from exc
+        return {
+            "status": "degraded-empty",
+            "url": absolute,
+            "urls": [],
+            "resolved_url": None,
+            "isResolved": False,
+            "error": str(exc),
+        }
 
 
 @router.get("/1xbet/channels", tags=["1XBet"])
@@ -542,9 +570,14 @@ async def get_one_xbet_channels(
 
         return {"status": "success", "url": absolute, "items": items}
     except HTTPException:
-        raise
+        return {"status": "degraded-empty", "url": absolute, "items": []}
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to load 1XBet channels: {exc}") from exc
+        return {
+            "status": "degraded-empty",
+            "url": absolute,
+            "items": [],
+            "error": str(exc),
+        }
 
 
 @router.get("/1xbet/match-details", tags=["1XBet"])
@@ -556,7 +589,15 @@ async def get_one_xbet_match_details(
 
     event = _find_event(payload, eventId)
     if event is None:
-        raise HTTPException(status_code=404, detail="1XBet event not found")
+        return {
+            "status": "degraded-empty",
+            "eventId": eventId,
+            "url": url,
+            "event": {},
+            "lineups": [],
+            "stats": [],
+            "incidents": [],
+        }
 
     home = _pick_str(event, ["teamAName", "homeTeam", "team1", "home"])
     away = _pick_str(event, ["teamBName", "awayTeam", "team2", "away"])
@@ -603,7 +644,7 @@ async def get_one_xbet_standings(
 
     event = _find_event(payload, eventId)
     if event is None:
-        raise HTTPException(status_code=404, detail="1XBet event not found")
+        return {"status": "degraded-empty", "eventId": eventId, "standings": []}
 
     home = _pick_str(event, ["teamAName", "homeTeam", "team1", "home"]) or "Home"
     away = _pick_str(event, ["teamBName", "awayTeam", "team2", "away"]) or "Away"
@@ -623,7 +664,7 @@ async def get_one_xbet_h2h(
 
     event = _find_event(payload, eventId)
     if event is None:
-        raise HTTPException(status_code=404, detail="1XBet event not found")
+        return {"status": "degraded-empty", "eventId": eventId, "h2h": []}
 
     home = _pick_str(event, ["teamAName", "homeTeam", "team1", "home"]) or "Home"
     away = _pick_str(event, ["teamBName", "awayTeam", "team2", "away"]) or "Away"
