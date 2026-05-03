@@ -439,6 +439,45 @@ def _build_payload_from_dashboard_cards(html: str) -> OneXbetDataPayload:
     )
 
 
+def _merge_event_lists(
+    primary: list[dict[str, Any]], secondary: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    # Keep primary order, then append unseen events from secondary.
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _event_key(item: dict[str, Any]) -> str:
+        for key in ("id", "event_id", "match_id", "eventUrl", "event_url", "url"):
+            value = item.get(key)
+            if value is not None:
+                text = str(value).strip()
+                if text:
+                    return text
+        return ""
+
+    for event in primary:
+        if not isinstance(event, dict):
+            continue
+        key = _event_key(event)
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        merged.append(event)
+
+    for event in secondary:
+        if not isinstance(event, dict):
+            continue
+        key = _event_key(event)
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        merged.append(event)
+
+    return merged
+
+
 def _extract_first(pattern: str, text: str, flags: int = re.IGNORECASE | re.DOTALL) -> str:
     match = re.search(pattern, text, flags)
     if not match:
@@ -545,58 +584,78 @@ async def _build_one_xbet_payload() -> OneXbetDataPayload:
         "Accept-Encoding": "gzip",
         "Connection": "Keep-Alive",
     }
+    json_payload: OneXbetDataPayload | None = None
+    live_dashboard_payload: OneXbetDataPayload | None = None
+    live_html_payload: OneXbetDataPayload | None = None
+
+    # First: attempt source JSON payload (often stable, but may be a subset).
     try:
         source_url = await _resolve_source_url()
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
             res = await client.get(source_url, headers=headers)
-        if res.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"1XBet source HTTP {res.status_code}")
+        if res.status_code == 200:
+            root = res.json()
+            if isinstance(root, dict):
+                payload = root
+            elif isinstance(root, list) and root and isinstance(root[0], dict):
+                payload = root[0]
+            else:
+                payload = None
 
-        root = res.json()
-        if isinstance(root, dict):
-            payload = root
-        elif isinstance(root, list) and root and isinstance(root[0], dict):
-            payload = root[0]
-        else:
-            raise HTTPException(status_code=502, detail="Unexpected 1XBet source structure")
+            if isinstance(payload, dict):
+                events_tokens = _parse_token_list(payload.get("events"))
+                categories_tokens = _parse_token_list(payload.get("categories"))
+                highlights_tokens = _parse_token_list(payload.get("highlights"))
 
-        events_tokens = _parse_token_list(payload.get("events"))
-        categories_tokens = _parse_token_list(payload.get("categories"))
-        highlights_tokens = _parse_token_list(payload.get("highlights"))
+                events: list[dict[str, Any]] = []
+                categories: list[dict[str, Any]] = []
+                highlights: list[dict[str, Any]] = []
 
-        events: list[dict[str, Any]] = []
-        categories: list[dict[str, Any]] = []
-        highlights: list[dict[str, Any]] = []
+                for t in events_tokens:
+                    events.extend(_extract_maps(_decode_token(t)))
+                for t in categories_tokens:
+                    categories.extend(_extract_maps(_decode_token(t)))
+                categories = [
+                    c for c in categories if str(c.get("type", "")).strip().lower() != "custom"
+                ]
+                for t in highlights_tokens:
+                    highlights.extend(_extract_maps(_decode_token(t)))
 
-        for t in events_tokens:
-            events.extend(_extract_maps(_decode_token(t)))
-        for t in categories_tokens:
-            categories.extend(_extract_maps(_decode_token(t)))
-        categories = [
-            c for c in categories if str(c.get("type", "")).strip().lower() != "custom"
-        ]
-        for t in highlights_tokens:
-            highlights.extend(_extract_maps(_decode_token(t)))
-
-        return OneXbetDataPayload(
-            source_url=source_url,
-            events=events,
-            categories=categories,
-            highlights=highlights,
-        )
+                json_payload = OneXbetDataPayload(
+                    source_url=source_url,
+                    events=events,
+                    categories=categories,
+                    highlights=highlights,
+                )
     except Exception:
-        # If feed/json endpoint is blocked, parse public live page directly.
+        pass
+
+    # Second: always try public /en/live cards and merge to avoid featured-only subsets.
+    try:
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
             live_res = await client.get(ONE_XBET_LIVE_URL, headers=headers)
-        if live_res.status_code != 200:
-            raise HTTPException(
-                status_code=502,
-                detail=f"1XBet live page HTTP {live_res.status_code}",
-            )
-        payload = _build_payload_from_dashboard_cards(live_res.text)
-        if payload.events:
-            return payload
-        return _build_payload_from_live_html(live_res.text)
+        if live_res.status_code == 200:
+            live_dashboard_payload = _build_payload_from_dashboard_cards(live_res.text)
+            if not live_dashboard_payload.events:
+                live_html_payload = _build_payload_from_live_html(live_res.text)
+    except Exception:
+        pass
+
+    # Prefer merged payload to maximize cards shown in client.
+    if json_payload and live_dashboard_payload:
+        return OneXbetDataPayload(
+            source_url=json_payload.source_url or ONE_XBET_LIVE_URL,
+            events=_merge_event_lists(live_dashboard_payload.events, json_payload.events),
+            categories=json_payload.categories,
+            highlights=json_payload.highlights,
+        )
+    if live_dashboard_payload and live_dashboard_payload.events:
+        return live_dashboard_payload
+    if json_payload:
+        return json_payload
+    if live_html_payload and live_html_payload.events:
+        return live_html_payload
+    raise HTTPException(status_code=502, detail="Could not build 1XBet payload")
 
 
 def _pick_str(item: dict[str, Any], keys: list[str]) -> str:
@@ -631,7 +690,7 @@ async def get_one_xbet_live_data() -> OneXbetDataResponse:
         payload = await _build_one_xbet_payload()
         response = OneXbetDataResponse(data=payload)
         dumped = response.model_dump()
-        await cache.set(ONE_XBET_CACHE_KEY, dumped, ttl_seconds=300)
+        await cache.set(ONE_XBET_CACHE_KEY, dumped, ttl_seconds=60)
         await cache.set(ONE_XBET_LAST_GOOD_CACHE_KEY, dumped, ttl_seconds=60 * 60 * 24 * 7)
         return response
     except Exception:
@@ -662,7 +721,7 @@ async def _get_cached_or_build_payload() -> OneXbetDataPayload:
         payload = await _build_one_xbet_payload()
         response = OneXbetDataResponse(data=payload)
         dumped = response.model_dump()
-        await cache.set(ONE_XBET_CACHE_KEY, dumped, ttl_seconds=300)
+        await cache.set(ONE_XBET_CACHE_KEY, dumped, ttl_seconds=60)
         await cache.set(ONE_XBET_LAST_GOOD_CACHE_KEY, dumped, ttl_seconds=60 * 60 * 24 * 7)
         return payload
     except Exception:
