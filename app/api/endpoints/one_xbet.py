@@ -261,6 +261,64 @@ def _extract_json_candidates_from_html(html: str) -> list[str]:
     return out
 
 
+def _strip_html_tags(value: str) -> str:
+    return re.sub(r"<[^>]+>", "", value).strip()
+
+
+def _build_payload_from_live_html(html: str) -> OneXbetDataPayload:
+    # Fallback parser for public /en/live page when JSON/API feeds are blocked.
+    # We extract event links and labels and map them into app-friendly event rows.
+    anchor_matches = re.findall(
+        r"""<a[^>]+href=["'](/en/live/[^"']+)["'][^>]*>(.*?)</a>""",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    events: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    for href, raw_label in anchor_matches:
+        label = _strip_html_tags(raw_label)
+        if not label:
+            continue
+        # Event pages usually end with ".../<event_id>-slug"
+        event_id_match = re.search(r"/(\d+)-[^/]+$", href)
+        event_id = event_id_match.group(1) if event_id_match else ""
+        if not event_id or event_id in seen_ids:
+            continue
+        seen_ids.add(event_id)
+
+        absolute_url = f"https://1xlite-08668.world{href}"
+        title = re.sub(r"\s+", " ", label).strip()
+
+        # Best-effort league extraction from URL path segment:
+        # /en/live/football/<league-segment>/<event-id>-...
+        league = ""
+        league_match = re.search(r"/en/live/[^/]+/([^/]+)/\d+-", href)
+        if league_match:
+            league = league_match.group(1).replace("-", " ").strip()
+
+        events.append(
+            {
+                "id": event_id,
+                "event_id": event_id,
+                "title": title,
+                "eventName": title,
+                "league": league or "Live",
+                "status": "live",
+                "stream_url": absolute_url,
+                "source": "live-page-fallback",
+            }
+        )
+
+    return OneXbetDataPayload(
+        source_url=ONE_XBET_SITE_URL,
+        events=events,
+        categories=[],
+        highlights=[],
+    )
+
+
 async def _resolve_source_url() -> str:
     headers = {
         "User-Agent": "okhttp/4.12.0",
@@ -295,55 +353,60 @@ async def _resolve_source_url() -> str:
 
 
 async def _build_one_xbet_payload() -> OneXbetDataPayload:
-    source_url = await _resolve_source_url()
-    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-        res = await client.get(
-            source_url,
-            headers={
-                "User-Agent": "okhttp/4.12.0",
-                "Accept-Encoding": "gzip",
-                "Connection": "Keep-Alive",
-            },
-        )
-    if res.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"1XBet source HTTP {res.status_code}")
-
+    headers = {
+        "User-Agent": "okhttp/4.12.0",
+        "Accept-Encoding": "gzip",
+        "Connection": "Keep-Alive",
+    }
     try:
+        source_url = await _resolve_source_url()
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            res = await client.get(source_url, headers=headers)
+        if res.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"1XBet source HTTP {res.status_code}")
+
         root = res.json()
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail="Invalid 1XBet source payload") from exc
+        if isinstance(root, dict):
+            payload = root
+        elif isinstance(root, list) and root and isinstance(root[0], dict):
+            payload = root[0]
+        else:
+            raise HTTPException(status_code=502, detail="Unexpected 1XBet source structure")
 
-    if isinstance(root, dict):
-        payload = root
-    elif isinstance(root, list) and root and isinstance(root[0], dict):
-        payload = root[0]
-    else:
-        raise HTTPException(status_code=502, detail="Unexpected 1XBet source structure")
+        events_tokens = _parse_token_list(payload.get("events"))
+        categories_tokens = _parse_token_list(payload.get("categories"))
+        highlights_tokens = _parse_token_list(payload.get("highlights"))
 
-    events_tokens = _parse_token_list(payload.get("events"))
-    categories_tokens = _parse_token_list(payload.get("categories"))
-    highlights_tokens = _parse_token_list(payload.get("highlights"))
+        events: list[dict[str, Any]] = []
+        categories: list[dict[str, Any]] = []
+        highlights: list[dict[str, Any]] = []
 
-    events: list[dict[str, Any]] = []
-    categories: list[dict[str, Any]] = []
-    highlights: list[dict[str, Any]] = []
+        for t in events_tokens:
+            events.extend(_extract_maps(_decode_token(t)))
+        for t in categories_tokens:
+            categories.extend(_extract_maps(_decode_token(t)))
+        categories = [
+            c for c in categories if str(c.get("type", "")).strip().lower() != "custom"
+        ]
+        for t in highlights_tokens:
+            highlights.extend(_extract_maps(_decode_token(t)))
 
-    for t in events_tokens:
-        events.extend(_extract_maps(_decode_token(t)))
-    for t in categories_tokens:
-        categories.extend(_extract_maps(_decode_token(t)))
-    categories = [
-        c for c in categories if str(c.get("type", "")).strip().lower() != "custom"
-    ]
-    for t in highlights_tokens:
-        highlights.extend(_extract_maps(_decode_token(t)))
-
-    return OneXbetDataPayload(
-        source_url=source_url,
-        events=events,
-        categories=categories,
-        highlights=highlights,
-    )
+        return OneXbetDataPayload(
+            source_url=source_url,
+            events=events,
+            categories=categories,
+            highlights=highlights,
+        )
+    except Exception:
+        # If feed/json endpoint is blocked, parse public live page directly.
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            live_res = await client.get(ONE_XBET_SITE_URL, headers=headers)
+        if live_res.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=f"1XBet live page HTTP {live_res.status_code}",
+            )
+        return _build_payload_from_live_html(live_res.text)
 
 
 def _pick_str(item: dict[str, Any], keys: list[str]) -> str:
