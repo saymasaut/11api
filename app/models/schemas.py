@@ -120,6 +120,7 @@ class ListItem(BaseModel):
     title: Optional[str] = None
     thumbnail_url: Optional[str] = None
     duration: Optional[str] = None
+    views: Optional[str] = None
     uploader_name: Optional[str] = None
     uploader_avatar_url: Optional[str] = None
     category: Optional[str] = None
