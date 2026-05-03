@@ -266,6 +266,16 @@ def _strip_html_tags(value: str) -> str:
     return re.sub(r"<[^>]+>", "", value).strip()
 
 
+def _sport_slug_from_live_href(href: str) -> str:
+    m = re.match(r"/en/live/([^/]+)/", href.strip(), flags=re.IGNORECASE)
+    return (m.group(1) or "").strip().lower() if m else ""
+
+
+_DASHBOARD_EVENT_HREF_RE = re.compile(
+    r"""(?i)(?:href|data-href)\s*=\s*(["'])(/en/live/[^"']+/\d+-[^"']+)\1""",
+)
+
+
 def _build_payload_from_live_html(html: str) -> OneXbetDataPayload:
     # Fallback parser for public /en/live page when JSON/API feeds are blocked.
     # We extract event links and labels and map them into app-friendly event rows.
@@ -299,6 +309,8 @@ def _build_payload_from_live_html(html: str) -> OneXbetDataPayload:
         if league_match:
             league = league_match.group(1).replace("-", " ").strip()
 
+        sport = _sport_slug_from_live_href(href)
+
         events.append(
             {
                 "id": event_id,
@@ -306,6 +318,7 @@ def _build_payload_from_live_html(html: str) -> OneXbetDataPayload:
                 "title": title,
                 "eventName": title,
                 "league": league or "Live",
+                "sport": sport,
                 "status": "live",
                 "stream_url": absolute_url,
                 "source": "live-page-fallback",
@@ -321,32 +334,26 @@ def _build_payload_from_live_html(html: str) -> OneXbetDataPayload:
 
 
 def _build_payload_from_dashboard_cards(html: str) -> OneXbetDataPayload:
-    # Parse dashboard game cards from /en/live markup.
-    game_blocks = re.finditer(
-        r"""<li[^>]+class="[^"]*dashboard-game[^"]*"[^>]*>(.*?)</li>""",
-        html,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
+    # Prefer scanning concrete event hrefs instead of splitting on the first </li>,
+    # because nested markup (common on some sports) breaks naive <li> boundaries.
     events: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    for match in game_blocks:
-        block = match.group(1)
-        href_match = re.search(
-            r"""href="(/en/live/[^"]+/\d+-[^"]+)\"""",
-            block,
-            flags=re.IGNORECASE,
-        )
-        if not href_match:
-            continue
-        href = href_match.group(1).strip()
+    for href_match in _DASHBOARD_EVENT_HREF_RE.finditer(html):
+        href = href_match.group(2).strip()
         event_id_match = re.search(r"/(\d+)-[^/]+$", href)
         event_id = event_id_match.group(1) if event_id_match else ""
         if not event_id or event_id in seen:
             continue
         seen.add(event_id)
 
-        prefix = html[max(0, match.start() - 7000):match.start()]
+        pos = href_match.start()
+        chunk_start = max(0, pos - 7000)
+        chunk_end = min(len(html), pos + 11000)
+        chunk = html[chunk_start:chunk_end]
+        local_pos = pos - chunk_start
+        prefix = chunk[:local_pos]
+
         league_labels = re.findall(
             r"""dashboard-champ-name__caption[^>]*>(.*?)</span>""",
             prefix,
@@ -365,7 +372,7 @@ def _build_payload_from_dashboard_cards(html: str) -> OneXbetDataPayload:
 
         names = re.findall(
             r"""dashboard-game-team-info__name"[^>]*>(.*?)</span>""",
-            block,
+            chunk,
             flags=re.IGNORECASE | re.DOTALL,
         )
         names = [_strip_html_tags(x).strip() for x in names if _strip_html_tags(x).strip()]
@@ -374,7 +381,7 @@ def _build_payload_from_dashboard_cards(html: str) -> OneXbetDataPayload:
 
         logo_urls = re.findall(
             r"""src="([^"]*logo_teams[^"]+)\"""",
-            block,
+            chunk,
             flags=re.IGNORECASE,
         )
         home_logo = logo_urls[0] if len(logo_urls) > 0 else ""
@@ -382,7 +389,7 @@ def _build_payload_from_dashboard_cards(html: str) -> OneXbetDataPayload:
 
         scores = re.findall(
             r"""ui-game-scores__num"[^>]*>(.*?)</span>""",
-            block,
+            chunk,
             flags=re.IGNORECASE | re.DOTALL,
         )
         scores = [_strip_html_tags(x).strip() for x in scores if _strip_html_tags(x).strip()]
@@ -391,14 +398,14 @@ def _build_payload_from_dashboard_cards(html: str) -> OneXbetDataPayload:
 
         more_match = re.search(
             r"""dashboard-game-more__count"[^>]*>([^<]+)""",
-            block,
+            chunk,
             flags=re.IGNORECASE,
         )
         more_count = _strip_html_tags(more_match.group(1)).strip() if more_match else ""
 
         status_match = re.search(
             r"""dashboard-game-info__time"[^>]*>(.*?)</span>""",
-            block,
+            chunk,
             flags=re.IGNORECASE | re.DOTALL,
         )
         status = _strip_html_tags(status_match.group(1)).strip() if status_match else ""
@@ -407,6 +414,7 @@ def _build_payload_from_dashboard_cards(html: str) -> OneXbetDataPayload:
 
         title = f"{home} vs {away}".strip() if (home or away) else "Live match"
         event_url = f"https://1xlite-08668.world{href}"
+        sport = _sport_slug_from_live_href(href)
 
         events.append(
             {
@@ -422,6 +430,7 @@ def _build_payload_from_dashboard_cards(html: str) -> OneXbetDataPayload:
                 "teamBScore": away_score,
                 "league": league or "Live",
                 "league_url": league_url,
+                "sport": sport,
                 "status": "live",
                 "status_text": status,
                 "more_markets": more_count,
@@ -476,6 +485,12 @@ def _merge_event_lists(
         merged.append(event)
 
     return merged
+
+
+def _assign_display_order(events: list[dict[str, Any]]) -> None:
+    for i, item in enumerate(events):
+        if isinstance(item, dict):
+            item["display_order"] = i
 
 
 def _extract_first(pattern: str, text: str, flags: int = re.IGNORECASE | re.DOTALL) -> str:
@@ -642,20 +657,25 @@ async def _build_one_xbet_payload() -> OneXbetDataPayload:
         pass
 
     # Prefer merged payload to maximize cards shown in client.
+    result: OneXbetDataPayload | None = None
     if json_payload and live_dashboard_payload:
-        return OneXbetDataPayload(
+        result = OneXbetDataPayload(
             source_url=json_payload.source_url or ONE_XBET_LIVE_URL,
             events=_merge_event_lists(live_dashboard_payload.events, json_payload.events),
             categories=json_payload.categories,
             highlights=json_payload.highlights,
         )
-    if live_dashboard_payload and live_dashboard_payload.events:
-        return live_dashboard_payload
-    if json_payload:
-        return json_payload
-    if live_html_payload and live_html_payload.events:
-        return live_html_payload
-    raise HTTPException(status_code=502, detail="Could not build 1XBet payload")
+    elif live_dashboard_payload and live_dashboard_payload.events:
+        result = live_dashboard_payload
+    elif json_payload:
+        result = json_payload
+    elif live_html_payload and live_html_payload.events:
+        result = live_html_payload
+
+    if result is None:
+        raise HTTPException(status_code=502, detail="Could not build 1XBet payload")
+    _assign_display_order(result.events)
+    return result
 
 
 def _pick_str(item: dict[str, Any], keys: list[str]) -> str:
