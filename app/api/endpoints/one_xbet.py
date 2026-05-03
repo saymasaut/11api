@@ -389,24 +389,6 @@ def _build_payload_from_dashboard_cards(html: str) -> OneXbetDataPayload:
         home_score = scores[0] if len(scores) > 0 else ""
         away_score = scores[1] if len(scores) > 1 else ""
 
-        odds = re.findall(
-            r"""ui-market__value"[^>]*>(.*?)</span>""",
-            block,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        odds = [_strip_html_tags(x).strip() for x in odds if _strip_html_tags(x).strip()]
-        odd_labels = re.findall(
-            r"""ui-market__toggle[^>]*aria-label="([^"]+)\"""",
-            block,
-            flags=re.IGNORECASE,
-        )
-        odd1_label = odd_labels[0] if len(odd_labels) > 0 else "1"
-        oddx_label = odd_labels[1] if len(odd_labels) > 1 else "X"
-        odd2_label = odd_labels[2] if len(odd_labels) > 2 else "2"
-        odd1 = odds[0] if len(odds) > 0 else ""
-        oddx = odds[1] if len(odds) > 1 else ""
-        odd2 = odds[2] if len(odds) > 2 else ""
-
         more_match = re.search(
             r"""dashboard-game-more__count"[^>]*>([^<]+)""",
             block,
@@ -442,12 +424,6 @@ def _build_payload_from_dashboard_cards(html: str) -> OneXbetDataPayload:
                 "league_url": league_url,
                 "status": "live",
                 "status_text": status,
-                "odd1_label": odd1_label,
-                "oddx_label": oddx_label,
-                "odd2_label": odd2_label,
-                "odd1": odd1,
-                "oddx": oddx,
-                "odd2": odd2,
                 "more_markets": more_count,
                 "event_url": event_url,
                 "stream_url": event_url,
