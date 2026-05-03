@@ -14,6 +14,7 @@ from app.models.one_xbet_models import OneXbetDataPayload, OneXbetDataResponse
 router = APIRouter()
 
 ONE_XBET_SITE_URL = "https://1xlite-08668.world/en"
+ONE_XBET_LIVE_URL = "https://1xlite-08668.world/en/live"
 ONE_XBET_SOURCE_CANDIDATES = (
     "https://1xlite-08668.world/data/app.json",
     "https://1xlite-08668.world/data/sports.json",
@@ -319,6 +320,112 @@ def _build_payload_from_live_html(html: str) -> OneXbetDataPayload:
     )
 
 
+def _build_payload_from_dashboard_cards(html: str) -> OneXbetDataPayload:
+    # Parse dashboard game cards from /en/live markup.
+    game_blocks = re.findall(
+        r"""<li[^>]+class="[^"]*dashboard-game[^"]*"[^>]*>(.*?)</li>""",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    events: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for block in game_blocks:
+        href_match = re.search(
+            r"""href="(/en/live/[^"]+/\d+-[^"]+)\"""",
+            block,
+            flags=re.IGNORECASE,
+        )
+        if not href_match:
+            continue
+        href = href_match.group(1).strip()
+        event_id_match = re.search(r"/(\d+)-[^/]+$", href)
+        event_id = event_id_match.group(1) if event_id_match else ""
+        if not event_id or event_id in seen:
+            continue
+        seen.add(event_id)
+
+        names = re.findall(
+            r"""dashboard-game-team-info__name"[^>]*>(.*?)</span>""",
+            block,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        names = [_strip_html_tags(x).strip() for x in names if _strip_html_tags(x).strip()]
+        home = names[0] if len(names) > 0 else ""
+        away = names[1] if len(names) > 1 else ""
+
+        scores = re.findall(
+            r"""ui-game-scores__num"[^>]*>(.*?)</span>""",
+            block,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        scores = [_strip_html_tags(x).strip() for x in scores if _strip_html_tags(x).strip()]
+        home_score = scores[0] if len(scores) > 0 else ""
+        away_score = scores[1] if len(scores) > 1 else ""
+
+        odds = re.findall(
+            r"""ui-market__value"[^>]*>(.*?)</span>""",
+            block,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        odds = [_strip_html_tags(x).strip() for x in odds if _strip_html_tags(x).strip()]
+        odd1 = odds[0] if len(odds) > 0 else ""
+        oddx = odds[1] if len(odds) > 1 else ""
+        odd2 = odds[2] if len(odds) > 2 else ""
+
+        more_match = re.search(
+            r"""dashboard-game-more__count"[^>]*>([^<]+)""",
+            block,
+            flags=re.IGNORECASE,
+        )
+        more_count = _strip_html_tags(more_match.group(1)).strip() if more_match else ""
+
+        status_match = re.search(
+            r"""dashboard-game-info__time"[^>]*>(.*?)</span>""",
+            block,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        status = _strip_html_tags(status_match.group(1)).strip() if status_match else ""
+        if not status:
+            status = "Event in progress"
+
+        league = ""
+        league_match = re.search(r"/en/live/[^/]+/([^/]+)/\d+-", href)
+        if league_match:
+            league = league_match.group(1).replace("-", " ").strip()
+
+        title = f"{home} vs {away}".strip() if (home or away) else "Live match"
+
+        events.append(
+            {
+                "id": event_id,
+                "event_id": event_id,
+                "title": title,
+                "eventName": title,
+                "teamAName": home,
+                "teamBName": away,
+                "teamAScore": home_score,
+                "teamBScore": away_score,
+                "league": league or "Live",
+                "status": "live",
+                "status_text": status,
+                "odd1": odd1,
+                "oddx": oddx,
+                "odd2": odd2,
+                "more_markets": more_count,
+                "stream_url": f"https://1xlite-08668.world{href}",
+                "source": "live-dashboard-fallback",
+            }
+        )
+
+    return OneXbetDataPayload(
+        source_url=ONE_XBET_LIVE_URL,
+        events=events,
+        categories=[],
+        highlights=[],
+    )
+
+
 def _extract_first(pattern: str, text: str, flags: int = re.IGNORECASE | re.DOTALL) -> str:
     match = re.search(pattern, text, flags)
     if not match:
@@ -467,12 +574,15 @@ async def _build_one_xbet_payload() -> OneXbetDataPayload:
     except Exception:
         # If feed/json endpoint is blocked, parse public live page directly.
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            live_res = await client.get(ONE_XBET_SITE_URL, headers=headers)
+            live_res = await client.get(ONE_XBET_LIVE_URL, headers=headers)
         if live_res.status_code != 200:
             raise HTTPException(
                 status_code=502,
                 detail=f"1XBet live page HTTP {live_res.status_code}",
             )
+        payload = _build_payload_from_dashboard_cards(live_res.text)
+        if payload.events:
+            return payload
         return _build_payload_from_live_html(live_res.text)
 
 
