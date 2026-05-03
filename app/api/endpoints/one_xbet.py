@@ -20,6 +20,7 @@ ONE_XBET_SOURCE_CANDIDATES = (
 )
 ONE_XBET_DATA_BASE_URL = "https://1xlite-08668.world/data/"
 ONE_XBET_CACHE_KEY = "one_xbet:data:decoded"
+ONE_XBET_LAST_GOOD_CACHE_KEY = "one_xbet:data:last_good"
 
 _PLAIN_ALPHA = "aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ"
 _CODED_ALPHA = "fFgGjJkKaApPbBmMoOzZeEnNcCdDrRqQtTvVuUxXhHiIwWyYlLsS"
@@ -373,10 +374,40 @@ async def get_one_xbet_live_data() -> OneXbetDataResponse:
     if cached:
         return OneXbetDataResponse.model_validate(cached)
 
-    payload = await _build_one_xbet_payload()
-    response = OneXbetDataResponse(data=payload)
-    await cache.set(ONE_XBET_CACHE_KEY, response.model_dump(), ttl_seconds=300)
-    return response
+    try:
+        payload = await _build_one_xbet_payload()
+        response = OneXbetDataResponse(data=payload)
+        dumped = response.model_dump()
+        await cache.set(ONE_XBET_CACHE_KEY, dumped, ttl_seconds=300)
+        await cache.set(ONE_XBET_LAST_GOOD_CACHE_KEY, dumped, ttl_seconds=60 * 60 * 24 * 7)
+        return response
+    except Exception:
+        # Fallback to last known-good payload to avoid 502 for clients.
+        last_good = await cache.get(ONE_XBET_LAST_GOOD_CACHE_KEY)
+        if last_good:
+            fallback = OneXbetDataResponse.model_validate(last_good)
+            fallback.status = "degraded-cache"
+            return fallback
+        raise
+
+
+async def _get_cached_or_build_payload() -> OneXbetDataPayload:
+    cached = await cache.get(ONE_XBET_CACHE_KEY)
+    if cached:
+        return OneXbetDataResponse.model_validate(cached).data
+
+    try:
+        payload = await _build_one_xbet_payload()
+        response = OneXbetDataResponse(data=payload)
+        dumped = response.model_dump()
+        await cache.set(ONE_XBET_CACHE_KEY, dumped, ttl_seconds=300)
+        await cache.set(ONE_XBET_LAST_GOOD_CACHE_KEY, dumped, ttl_seconds=60 * 60 * 24 * 7)
+        return payload
+    except Exception:
+        last_good = await cache.get(ONE_XBET_LAST_GOOD_CACHE_KEY)
+        if last_good:
+            return OneXbetDataResponse.model_validate(last_good).data
+        raise
 
 
 @router.get("/1xbet/resolve-link", tags=["1XBet"])
@@ -521,16 +552,7 @@ async def get_one_xbet_match_details(
     eventId: str = Query(..., description="1XBet event id"),
     url: str | None = Query(None, description="Optional source json url"),
 ) -> dict[str, Any]:
-    cached = await cache.get(ONE_XBET_CACHE_KEY)
-    if cached:
-        payload = OneXbetDataResponse.model_validate(cached).data
-    else:
-        payload = await _build_one_xbet_payload()
-        await cache.set(
-            ONE_XBET_CACHE_KEY,
-            OneXbetDataResponse(data=payload).model_dump(),
-            ttl_seconds=300,
-        )
+    payload = await _get_cached_or_build_payload()
 
     event = _find_event(payload, eventId)
     if event is None:
@@ -577,16 +599,7 @@ async def get_one_xbet_match_details(
 async def get_one_xbet_standings(
     eventId: str = Query(..., description="1XBet event id"),
 ) -> dict[str, Any]:
-    cached = await cache.get(ONE_XBET_CACHE_KEY)
-    if cached:
-        payload = OneXbetDataResponse.model_validate(cached).data
-    else:
-        payload = await _build_one_xbet_payload()
-        await cache.set(
-            ONE_XBET_CACHE_KEY,
-            OneXbetDataResponse(data=payload).model_dump(),
-            ttl_seconds=300,
-        )
+    payload = await _get_cached_or_build_payload()
 
     event = _find_event(payload, eventId)
     if event is None:
@@ -606,16 +619,7 @@ async def get_one_xbet_standings(
 async def get_one_xbet_h2h(
     eventId: str = Query(..., description="1XBet event id"),
 ) -> dict[str, Any]:
-    cached = await cache.get(ONE_XBET_CACHE_KEY)
-    if cached:
-        payload = OneXbetDataResponse.model_validate(cached).data
-    else:
-        payload = await _build_one_xbet_payload()
-        await cache.set(
-            ONE_XBET_CACHE_KEY,
-            OneXbetDataResponse(data=payload).model_dump(),
-            ttl_seconds=300,
-        )
+    payload = await _get_cached_or_build_payload()
 
     event = _find_event(payload, eventId)
     if event is None:
