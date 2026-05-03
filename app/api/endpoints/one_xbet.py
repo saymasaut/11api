@@ -319,6 +319,73 @@ def _build_payload_from_live_html(html: str) -> OneXbetDataPayload:
     )
 
 
+def _extract_first(pattern: str, text: str, flags: int = re.IGNORECASE | re.DOTALL) -> str:
+    match = re.search(pattern, text, flags)
+    if not match:
+        return ""
+    return _strip_html_tags(match.group(1)).strip()
+
+
+async def _parse_event_page_details(event_url: str) -> dict[str, Any]:
+    headers = {
+        "User-Agent": "okhttp/4.12.0",
+        "Accept-Encoding": "gzip",
+        "Connection": "Keep-Alive",
+    }
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+        res = await client.get(event_url, headers=headers)
+    if res.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Event page HTTP {res.status_code}")
+
+    html = res.text
+    title = _extract_first(r"<title>(.*?)</title>", html)
+    league = _extract_first(r"/en/live/[^/]+/([^/]+)/\d+-", event_url).replace("-", " ")
+
+    team_names = re.findall(
+        r'class="scoreboard-team-name__text"[^>]*>(.*?)</span>',
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    clean_teams = [_strip_html_tags(t).strip() for t in team_names if _strip_html_tags(t).strip()]
+    home = clean_teams[0] if len(clean_teams) > 0 else ""
+    away = clean_teams[1] if len(clean_teams) > 1 else ""
+
+    score_values = re.findall(
+        r'class="[^"]*scoreboard-scores__score[^"]*"[^>]*>(.*?)</span>',
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    clean_scores = [_strip_html_tags(s).strip() for s in score_values if _strip_html_tags(s).strip()]
+    home_score = clean_scores[0] if len(clean_scores) > 0 else ""
+    away_score = clean_scores[1] if len(clean_scores) > 1 else ""
+
+    # Cricket-specific highlights often appear in tables.
+    wickets = re.findall(
+        r'cricket-overs-statistic__text"[^>]*>(.*?)</span>',
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    wickets_clean = []
+    for w in wickets:
+        text = _strip_html_tags(w).strip()
+        if text and text not in wickets_clean:
+            wickets_clean.append(text)
+    wickets_clean = wickets_clean[:8]
+
+    status = "live" if ("event in progress" in html.lower() or "scoreboard-status" in html.lower()) else ""
+
+    return {
+        "title": title,
+        "league": league,
+        "home": home,
+        "away": away,
+        "home_score": home_score,
+        "away_score": away_score,
+        "status": status,
+        "wickets": wickets_clean,
+    }
+
+
 async def _resolve_source_url() -> str:
     headers = {
         "User-Agent": "okhttp/4.12.0",
@@ -648,6 +715,45 @@ async def get_one_xbet_match_details(
     eventId: str = Query(..., description="1XBet event id"),
     url: str | None = Query(None, description="Optional source json url"),
 ) -> dict[str, Any]:
+    if url and url.strip():
+        try:
+            parsed = await _parse_event_page_details(url.strip())
+            home = parsed.get("home", "")
+            away = parsed.get("away", "")
+            home_score = parsed.get("home_score", "")
+            away_score = parsed.get("away_score", "")
+            status = parsed.get("status", "")
+            wickets = parsed.get("wickets", [])
+            return {
+                "status": "success",
+                "eventId": eventId,
+                "url": url,
+                "event": {
+                    "id": eventId,
+                    "title": parsed.get("title", ""),
+                    "eventName": parsed.get("title", ""),
+                    "league": parsed.get("league", ""),
+                    "teamAName": home,
+                    "teamBName": away,
+                    "teamAScore": home_score,
+                    "teamBScore": away_score,
+                    "match_status": status,
+                },
+                "lineups": [
+                    {"team": home or "Home", "formation": "N/A"},
+                    {"team": away or "Away", "formation": "N/A"},
+                ],
+                "stats": [
+                    {"name": "Home score", "value": home_score or "-"},
+                    {"name": "Away score", "value": away_score or "-"},
+                    {"name": "Status", "value": status or "-"},
+                ],
+                "incidents": [{"title": "Wicket", "value": w} for w in wickets],
+            }
+        except Exception:
+            # Fall through to cache/event-based fallback path below.
+            pass
+
     payload = await _get_cached_or_build_payload()
 
     event = _find_event(payload, eventId)
