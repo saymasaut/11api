@@ -29,6 +29,7 @@ ONE_XBET_SOURCE_CANDIDATES = (
     "https://1xlite-08668.world/data/sports.json",
 )
 ONE_XBET_DATA_BASE_URL = "https://1xlite-08668.world/data/"
+ONE_XBET_MEDIA_CDN_BASE = "https://v3.traincdn.com"
 ONE_XBET_CACHE_KEY = "one_xbet:data:decoded"
 ONE_XBET_LAST_GOOD_CACHE_KEY = "one_xbet:data:last_good"
 
@@ -486,11 +487,40 @@ def _merge_event_lists(
     return merged
 
 
+def _resolve_media_url(value: str) -> str:
+    v = value.strip()
+    if not v:
+        return v
+    if v.startswith("http://") or v.startswith("https://"):
+        return v
+    if v.startswith("/"):
+        return f"{ONE_XBET_MEDIA_CDN_BASE}{v}"
+    if v.startswith("sfiles/"):
+        return f"{ONE_XBET_MEDIA_CDN_BASE}/{v}"
+    return v
+
+
+def _resolve_media_urls_in_payload(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {k: _resolve_media_urls_in_payload(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_resolve_media_urls_in_payload(v) for v in obj]
+    if isinstance(obj, str):
+        v = obj.strip()
+        if v.startswith("/sfiles/") or v.startswith("sfiles/"):
+            return _resolve_media_url(v)
+    return obj
+
+
 def _build_payload_from_official_best_games(root: Any) -> OneXbetDataPayload:
     if not isinstance(root, list):
         raise HTTPException(status_code=502, detail="Unexpected official bestGames structure")
-    # User requested passthrough: keep official items raw without field mapping.
-    events = [dict(item) for item in root if isinstance(item, dict)]
+    # Passthrough official items, only resolving relative media paths to CDN URLs.
+    events = [
+        _resolve_media_urls_in_payload(dict(item))
+        for item in root
+        if isinstance(item, dict)
+    ]
     return OneXbetDataPayload(events=events)
 
 
