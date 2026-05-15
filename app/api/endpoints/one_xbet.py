@@ -334,12 +334,7 @@ def _build_payload_from_live_html(html: str) -> OneXbetDataPayload:
             }
         )
 
-    return OneXbetDataPayload(
-        source_url=ONE_XBET_SITE_URL,
-        events=events,
-        categories=[],
-        highlights=[],
-    )
+    return OneXbetDataPayload(events=events)
 
 
 def _build_payload_from_dashboard_cards(html: str) -> OneXbetDataPayload:
@@ -449,12 +444,7 @@ def _build_payload_from_dashboard_cards(html: str) -> OneXbetDataPayload:
             }
         )
 
-    return OneXbetDataPayload(
-        source_url=ONE_XBET_LIVE_URL,
-        events=events,
-        categories=[],
-        highlights=[],
-    )
+    return OneXbetDataPayload(events=events)
 
 
 def _merge_event_lists(
@@ -501,12 +491,7 @@ def _build_payload_from_official_best_games(root: Any) -> OneXbetDataPayload:
         raise HTTPException(status_code=502, detail="Unexpected official bestGames structure")
     # User requested passthrough: keep official items raw without field mapping.
     events = [dict(item) for item in root if isinstance(item, dict)]
-    return OneXbetDataPayload(
-        source_url=ONE_XBET_OFFICIAL_BEST_GAMES_URL,
-        events=events,
-        categories=[],
-        highlights=[],
-    )
+    return OneXbetDataPayload(events=events)
 
 
 def _assign_display_order(events: list[dict[str, Any]]) -> None:
@@ -655,29 +640,11 @@ async def _build_one_xbet_payload() -> OneXbetDataPayload:
 
             if isinstance(payload, dict):
                 events_tokens = _parse_token_list(payload.get("events"))
-                categories_tokens = _parse_token_list(payload.get("categories"))
-                highlights_tokens = _parse_token_list(payload.get("highlights"))
-
                 events: list[dict[str, Any]] = []
-                categories: list[dict[str, Any]] = []
-                highlights: list[dict[str, Any]] = []
-
                 for t in events_tokens:
                     events.extend(_extract_maps(_decode_token(t)))
-                for t in categories_tokens:
-                    categories.extend(_extract_maps(_decode_token(t)))
-                categories = [
-                    c for c in categories if str(c.get("type", "")).strip().lower() != "custom"
-                ]
-                for t in highlights_tokens:
-                    highlights.extend(_extract_maps(_decode_token(t)))
 
-                json_payload = OneXbetDataPayload(
-                    source_url=source_url,
-                    events=events,
-                    categories=categories,
-                    highlights=highlights,
-                )
+                json_payload = OneXbetDataPayload(events=events)
     except Exception:
         pass
 
@@ -701,34 +668,20 @@ async def _build_one_xbet_payload() -> OneXbetDataPayload:
     if official_payload and live_dashboard_payload and json_payload:
         merged = _merge_event_lists(official_payload.events, live_dashboard_payload.events)
         merged = _merge_event_lists(merged, json_payload.events)
-        result = OneXbetDataPayload(
-            source_url=official_payload.source_url or ONE_XBET_LIVE_URL,
-            events=merged,
-            categories=json_payload.categories,
-            highlights=json_payload.highlights,
-        )
+        result = OneXbetDataPayload(events=merged)
     elif official_payload and live_dashboard_payload:
         result = OneXbetDataPayload(
-            source_url=official_payload.source_url or ONE_XBET_LIVE_URL,
             events=_merge_event_lists(official_payload.events, live_dashboard_payload.events),
-            categories=[],
-            highlights=[],
         )
     elif official_payload and json_payload:
         result = OneXbetDataPayload(
-            source_url=official_payload.source_url or json_payload.source_url,
             events=_merge_event_lists(official_payload.events, json_payload.events),
-            categories=json_payload.categories,
-            highlights=json_payload.highlights,
         )
     elif official_payload:
         result = official_payload
     elif json_payload and live_dashboard_payload:
         result = OneXbetDataPayload(
-            source_url=json_payload.source_url or ONE_XBET_LIVE_URL,
             events=_merge_event_lists(live_dashboard_payload.events, json_payload.events),
-            categories=json_payload.categories,
-            highlights=json_payload.highlights,
         )
     elif live_dashboard_payload and live_dashboard_payload.events:
         result = live_dashboard_payload
@@ -739,9 +692,7 @@ async def _build_one_xbet_payload() -> OneXbetDataPayload:
 
     if result is None:
         raise HTTPException(status_code=502, detail="Could not build 1XBet payload")
-    # display_order is only for normalized fallback payloads, not raw passthrough.
-    if result.source_url != ONE_XBET_OFFICIAL_BEST_GAMES_URL:
-        _assign_display_order(result.events)
+    _assign_display_order(result.events)
     return result
 
 
@@ -790,12 +741,7 @@ async def get_one_xbet_live_data() -> OneXbetDataResponse:
         # Cold start with no cache: return empty successful payload instead of 502.
         return OneXbetDataResponse(
             status="degraded-empty",
-            data=OneXbetDataPayload(
-                events=[],
-                categories=[],
-                highlights=[],
-                source_url=ONE_XBET_SITE_URL,
-            ),
+            data=OneXbetDataPayload(events=[]),
         )
 
 
@@ -815,12 +761,7 @@ async def _get_cached_or_build_payload() -> OneXbetDataPayload:
         last_good = await cache.get(ONE_XBET_LAST_GOOD_CACHE_KEY)
         if last_good:
             return OneXbetDataResponse.model_validate(last_good).data
-        return OneXbetDataPayload(
-            events=[],
-            categories=[],
-            highlights=[],
-            source_url=ONE_XBET_SITE_URL,
-        )
+        return OneXbetDataPayload(events=[])
 
 
 @router.get("/1xbet/resolve-link", tags=["1XBet"])
