@@ -14,7 +14,7 @@ from app.core.pool import fetch_html as pool_fetch_html
 
 def can_handle(host: str) -> bool:
     h = (host or "").lower()
-    return h == "thekamababa.com" or h.endswith(".thekamababa.com")
+    return h == "kamababax.com" or h.endswith(".kamababax.com")
 
 
 def get_categories() -> list[dict]:
@@ -32,7 +32,7 @@ async def fetch_page(url: str) -> str:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.thekamababa.com/",
+        "Referer": "https://www.kamababax.com/",
     }
     return await pool_fetch_html(url, headers=headers)
 
@@ -223,7 +223,7 @@ def _normalize_video_href(href: str) -> Optional[str]:
     if href.startswith("//"):
         href = f"https:{href}"
     elif href.startswith("/"):
-        href = f"https://www.thekamababa.com{href}"
+        href = f"https://www.kamababax.com/{href}"
     if not href.startswith("http"):
         return None
 
@@ -251,7 +251,7 @@ def _normalize_video_href(href: str) -> Optional[str]:
     if not _is_probable_video_post(parsed):
         return None
     slug = parsed.path.strip("/").split("/", 1)[0]
-    return urlunparse(("https", "www.thekamababa.com", f"/{slug}/", "", "", ""))
+    return urlunparse(("https", "www.kamababax.com", f"/{slug}/", "", "", ""))
 
 
 def _extract_inline_urls(html: str) -> list[str]:
