@@ -108,6 +108,11 @@ def _normalize_duration(value: Any) -> Optional[str]:
             if h > 0:
                 return f"{h}:{m:02d}:{s:02d}"
             return f"{m}:{s:02d}"
+        
+        # Extract direct timestamp formats from text like "Duration: 12:34" or " 05:21 "
+        time_match = re.search(r"\b((?:\d{1,2}:)?\d{1,2}:\d{2})\b", v)
+        if time_match:
+            return time_match.group(1)
         return v or None
     return str(value).strip() or None
 
@@ -257,7 +262,6 @@ def _slug_tokens_from_url(page_url: str) -> set[str]:
 
 def _candidate_url_score(stream_url: str, slug_tokens: set[str]) -> tuple[int, int]:
     low = (stream_url or "").lower()
-    # Check for both old and new CDN patterns if applicable
     cdn_score = 2 if "cdn.kamababax.com" in low or "cdn.kamababa" in low else 0
     token_hits = sum(1 for t in slug_tokens if t in low)
     return (cdn_score + min(token_hits, 3), token_hits)
@@ -324,7 +328,6 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
     streams: list[dict[str, str]] = []
     seen: set[str] = set()
 
-    # Generic video tags extraction
     for video in soup.select("video"):
         src = _normalize_media_url(video.get("src") or "")
         if src and src not in seen:
@@ -337,7 +340,6 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
             seen.add(src)
             streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
 
-    # Regex fallback for scripts
     for src in _extract_inline_urls(html):
         if src in seen:
             continue
@@ -361,7 +363,6 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
         streams.append({"url": iframe_src, "quality": f"Server {server_idx}", "format": "embed"})
         server_idx += 1
 
-    # Sorting and selecting default
     def _score(item: dict[str, str]) -> tuple[int, int]:
         fmt = (item.get("format") or "").lower()
         q = item.get("quality") or ""
@@ -402,15 +403,12 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
         )
     ) or "Unknown Video"
 
-    # Initialize extracted value placeholders
     ld_views: Optional[str] = None
     ld_duration: Optional[str] = None
 
-    # Pull metrics out of JSON-LD data structures if available
     for graph in json_ld:
         if not isinstance(graph, dict):
             continue
-        # Check standard VideoObject schemas
         if graph.get("@type") == "VideoObject" or "VideoObject" in _as_list(graph.get("@type")):
             if "interactionCount" in graph:
                 ld_views = _extract_views_text(str(graph["interactionCount"]))
@@ -422,10 +420,9 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
             if "duration" in graph:
                 ld_duration = _normalize_duration(graph["duration"])
 
-    # Fallback to BeautifulSoup logic if JSON-LD parsing leaves fields empty
+    # Fallback directly to class attributes if structured JSON-LD data fields are empty
     html_views = _extract_views_from_container(soup) or _extract_views_text(soup.get_text(" ", strip=False))
     
-    # Check common HTML selectors for standalone duration formats (e.g., "05:21")
     html_duration = None
     duration_tag = soup.select_one(".duration, .video-duration, .time")
     if duration_tag:
@@ -501,12 +498,20 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
 
         title = _clean_title(a.get("title") or (img.get("alt") if img else None) or a.get_text(" ", strip=True)) or "Unknown Video"
 
+        # Extracts scoped listing metadata for class="views" and class="duration"
+        views = _extract_views_from_container(container)
+        
+        duration_tag = container.select_one(".duration, .video-duration, .time") if container else None
+        duration = _normalize_duration(duration_tag.get_text(strip=True)) if duration_tag else None
+
         seen.add(href)
         items.append({
             "url": href,
             "title": title,
             "thumbnail_url": thumb,
             "uploader_name": None,
+            "views": views,
+            "duration": duration,
         })
 
     return items[:limit]
