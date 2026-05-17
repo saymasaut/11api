@@ -14,6 +14,7 @@ from app.core.pool import fetch_html as pool_fetch_html
 
 def can_handle(host: str) -> bool:
     h = (host or "").lower()
+    # Updated to handle the new x-suffixed domain
     return h == "kamababax.com" or h.endswith(".kamababax.com")
 
 
@@ -133,7 +134,8 @@ def _clean_title(title: str | None) -> Optional[str]:
     if not title:
         return None
     t = title.strip()
-    for suffix in (" - KamaBaba", " | KamaBaba", " - TheKamaBaba", " | TheKamaBaba"):
+    # Updated title cleaning suffixes
+    for suffix in (" - Kamababax", " | Kamababax", " - TheKamababax", " | TheKamababax", " - KamaBaba", " | KamaBaba"):
         if t.endswith(suffix):
             t = t[: -len(suffix)].strip()
     return t or None
@@ -166,7 +168,6 @@ def _extract_views_from_container(container: Any) -> Optional[str]:
             direct = _extract_views_text(txt)
             if direct:
                 return direct
-            # Fallback for cases like "<span class='views'>146K</span>"
             return _clean_views_text(txt)
     return None
 
@@ -190,28 +191,11 @@ def _is_probable_video_post(parsed: Any) -> bool:
         return False
     slug = segments[0].lower()
     blocked_exact = {
-        "contact-us",
-        "contact",
-        "video-removal",
-        "privacy-policy",
-        "18-usc-2257",
-        "categories",
-        "category",
-        "tags",
-        "tag",
-        "support",
-        "advertise",
-        "jobs",
-        "unblock-kmb",
-        "about-us",
-        "author",
-        "feed",
-        "page",
-        "wp-admin",
-        "wp-content",
-        "login",
-        "register",
-        "reset-password",
+        "contact-us", "contact", "video-removal", "privacy-policy",
+        "18-usc-2257", "categories", "category", "tags", "tag",
+        "support", "advertise", "jobs", "unblock-kmb", "about-us",
+        "author", "feed", "page", "wp-admin", "wp-content", "login",
+        "register", "reset-password",
     }
     return slug not in blocked_exact
 
@@ -223,26 +207,18 @@ def _normalize_video_href(href: str) -> Optional[str]:
     if href.startswith("//"):
         href = f"https:{href}"
     elif href.startswith("/"):
-        href = f"https://www.kamababax.com/{href}"
+        href = f"https://www.kamababax.com{href}"
     if not href.startswith("http"):
         return None
 
     parsed = urlparse(href)
-    if "thekamababa.com" not in parsed.netloc.lower():
+    if "kamababax.com" not in parsed.netloc.lower():
         return None
     if any(
         x in parsed.path.lower()
         for x in (
-            "/wp-content/",
-            "/wp-json/",
-            "/category/",
-            "/categories/",
-            "/tag/",
-            "/tags/",
-            "/page/",
-            "/author/",
-            "/feed/",
-            "/support/",
+            "/wp-content/", "/wp-json/", "/category/", "/categories/",
+            "/tag/", "/tags/", "/page/", "/author/", "/feed/", "/support/",
         )
     ):
         return None
@@ -281,7 +257,8 @@ def _slug_tokens_from_url(page_url: str) -> set[str]:
 
 def _candidate_url_score(stream_url: str, slug_tokens: set[str]) -> tuple[int, int]:
     low = (stream_url or "").lower()
-    cdn_score = 2 if "cdn.kamababax.com" in low or "cdn.kamababax" in low else 0
+    # Check for both old and new CDN patterns if applicable
+    cdn_score = 2 if "cdn.kamababax.com" in low or "cdn.kamababa" in low else 0
     token_hits = sum(1 for t in slug_tokens if t in low)
     return (cdn_score + min(token_hits, 3), token_hits)
 
@@ -302,21 +279,10 @@ def _normalize_media_url(src: str, base: str = "https://www.kamababax.com/") -> 
 def _is_probable_ad_iframe(src: str) -> bool:
     s = (src or "").lower()
     blocked_markers = (
-        "googlesyndication",
-        "doubleclick",
-        "adservice",
-        "trafficjunky",
-        "blazingserver.net",
-        "videobaba.xyz",
-        "dscgirls.live",
-        "xlviiirdr.com",
-        "/delivery/afr.php",
-        "/ox/",
-        "zoneid=",
-        "campaignid=",
-        "creativeid=",
-        "spot=",
-        "affid=",
+        "googlesyndication", "doubleclick", "adservice", "trafficjunky",
+        "blazingserver.net", "videobaba.xyz", "dscgirls.live", "xlviiirdr.com",
+        "/delivery/afr.php", "/ox/", "zoneid=", "campaignid=", "creativeid=",
+        "spot=", "affid=",
     )
     return any(x in s for x in blocked_markers)
 
@@ -330,15 +296,7 @@ def _is_probable_playable_embed(src: str) -> bool:
         return False
     return any(
         marker in low
-        for marker in (
-            "/embed/",
-            "player",
-            "stream",
-            ".m3u8",
-            ".mp4",
-            "video",
-            "iframe",
-        )
+        for marker in ("/embed/", "player", "stream", ".m3u8", ".mp4", "video", "iframe")
     )
 
 
@@ -366,19 +324,7 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
     streams: list[dict[str, str]] = []
     seen: set[str] = set()
 
-    player_video = soup.select_one("video#video_html5_api")
-    if player_video:
-        src = _normalize_media_url(player_video.get("src") or "")
-        if src and src not in seen:
-            seen.add(src)
-            streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
-        for source in player_video.select("source[src]"):
-            src = _normalize_media_url(source.get("src") or "")
-            if not src or src in seen:
-                continue
-            seen.add(src)
-            streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
-
+    # Generic video tags extraction
     for video in soup.select("video"):
         src = _normalize_media_url(video.get("src") or "")
         if src and src not in seen:
@@ -391,17 +337,7 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
             seen.add(src)
             streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
 
-    for m in re.finditer(
-        r'id=["\']video_html5_api["\'][^>]*\bsrc=["\']([^"\']+)["\']',
-        html,
-        flags=re.IGNORECASE,
-    ):
-        src = _normalize_media_url(m.group(1))
-        if not src or src in seen:
-            continue
-        seen.add(src)
-        streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
-
+    # Regex fallback for scripts
     for src in _extract_inline_urls(html):
         if src in seen:
             continue
@@ -425,54 +361,17 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
         streams.append({"url": iframe_src, "quality": f"Server {server_idx}", "format": "embed"})
         server_idx += 1
 
-    for tag in soup.select("meta[itemprop='embedURL'][content]"):
-        embed_url = _normalize_media_url(tag.get("content") or "")
-        if not embed_url or embed_url in seen or not _is_probable_playable_embed(embed_url):
-            continue
-        seen.add(embed_url)
-        streams.append({"url": embed_url, "quality": f"Server {server_idx}", "format": "embed"})
-        server_idx += 1
-
-    for m in re.finditer(r"iframeSrc\s*=\s*['\"]([^'\"]+)['\"]", html, flags=re.IGNORECASE):
-        embed_url = _normalize_media_url(m.group(1))
-        if not embed_url or embed_url in seen or not _is_probable_playable_embed(embed_url):
-            continue
-        seen.add(embed_url)
-        streams.append({"url": embed_url, "quality": f"Server {server_idx}", "format": "embed"})
-        server_idx += 1
-
+    # Sorting and selecting default
     def _score(item: dict[str, str]) -> tuple[int, int]:
         fmt = (item.get("format") or "").lower()
         q = item.get("quality") or ""
         digits = re.search(r"(\d{3,4})", q)
         quality_score = int(digits.group(1)) if digits else 0
-        if fmt == "mp4":
-            return (3, quality_score)
-        if fmt == "hls":
-            return (2, quality_score)
+        if fmt == "mp4": return (3, quality_score)
+        if fmt == "hls": return (2, quality_score)
         return (1, 0)
 
-    streams = list(dict.fromkeys((json.dumps(s, sort_keys=True) for s in streams)))
-    materialized = [json.loads(s) for s in streams]
-    slug_tokens = _slug_tokens_from_url(page_url)
-
-    if slug_tokens:
-        mp4s = [s for s in materialized if s.get("format") == "mp4" and isinstance(s.get("url"), str)]
-        if mp4s:
-            scored = sorted(
-                ((s, _candidate_url_score(s["url"], slug_tokens)) for s in mp4s),
-                key=lambda x: x[1],
-                reverse=True,
-            )
-            best_score = scored[0][1]
-            if best_score[0] > 0:
-                keep_urls = {s["url"] for s, score in scored if score == best_score}
-                materialized = [
-                    s
-                    for s in materialized
-                    if s.get("format") != "mp4" or s.get("url") in keep_urls
-                ]
-
+    materialized = [json.loads(s) for s in list(dict.fromkeys((json.dumps(s, sort_keys=True) for s in streams)))]
     materialized.sort(key=_score, reverse=True)
 
     default_url = None
@@ -482,10 +381,9 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
             default_url = match.get("url")
             break
 
-    hls_url = next((s.get("url") for s in materialized if s.get("format") == "hls"), None)
     return {
         "streams": materialized,
-        "hls": hls_url,
+        "hls": next((s.get("url") for s in materialized if s.get("format") == "hls"), None),
         "default": default_url,
         "has_video": bool(materialized),
     }
@@ -504,80 +402,46 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
         )
     ) or "Unknown Video"
 
-    description = _first_non_empty(
-        _meta(soup, prop="og:description"),
-        _meta(soup, name="twitter:description"),
-        _meta(soup, name="description"),
-    )
+    # Initialize extracted value placeholders
+    ld_views: Optional[str] = None
+    ld_duration: Optional[str] = None
 
-    thumbnail = _first_non_empty(_meta(soup, prop="og:image"), _meta(soup, name="twitter:image"))
-    if thumbnail and thumbnail.startswith("//"):
-        thumbnail = f"https:{thumbnail}"
+    # Pull metrics out of JSON-LD data structures if available
+    for graph in json_ld:
+        if not isinstance(graph, dict):
+            continue
+        # Check standard VideoObject schemas
+        if graph.get("@type") == "VideoObject" or "VideoObject" in _as_list(graph.get("@type")):
+            if "interactionCount" in graph:
+                ld_views = _extract_views_text(str(graph["interactionCount"]))
+            elif graph.get("interactionStatistic"):
+                stats = _as_list(graph["interactionStatistic"])
+                for stat in stats:
+                    if isinstance(stat, dict) and "userInteractionCount" in stat:
+                        ld_views = _clean_views_text(str(stat["userInteractionCount"]))
+            if "duration" in graph:
+                ld_duration = _normalize_duration(graph["duration"])
 
-    upload_date = _first_non_empty(
-        _meta(soup, prop="article:published_time"),
-        _meta(soup, prop="article:modified_time"),
-    )
-    category = _meta(soup, prop="article:section")
+    # Fallback to BeautifulSoup logic if JSON-LD parsing leaves fields empty
+    html_views = _extract_views_from_container(soup) or _extract_views_text(soup.get_text(" ", strip=False))
+    
+    # Check common HTML selectors for standalone duration formats (e.g., "05:21")
+    html_duration = None
+    duration_tag = soup.select_one(".duration, .video-duration, .time")
+    if duration_tag:
+        html_duration = _normalize_duration(duration_tag.get_text(strip=True))
 
-    tags: list[str] = []
-    for tag in soup.find_all("meta", attrs={"property": "article:tag"}):
-        content = (tag.get("content") or "").strip()
-        if content:
-            tags.append(content)
+    views = _first_non_empty(ld_views, html_views)
+    duration = _first_non_empty(ld_duration, html_duration)
 
-    duration = None
-    uploader = None
-    views = None
-
-    for obj in json_ld:
-        types = obj.get("@type")
-        type_names = [str(x).lower() for x in types] if isinstance(types, list) else [str(types).lower()]
-        if "videoobject" in type_names or "blogposting" in type_names:
-            title = _clean_title(_first_non_empty(title, obj.get("name"), obj.get("headline"))) or title
-            description = _first_non_empty(description, obj.get("description"))
-
-            thumb = obj.get("thumbnailUrl") or obj.get("thumbnail")
-            if isinstance(thumb, list):
-                thumb = next((x for x in thumb if isinstance(x, str) and x.strip()), None)
-            thumbnail = _first_non_empty(thumbnail, thumb)
-
-            duration = _first_non_empty(duration, _normalize_duration(obj.get("duration")))
-            upload_date = _first_non_empty(upload_date, obj.get("datePublished"), obj.get("dateModified"))
-
-            author = obj.get("author")
-            if isinstance(author, dict):
-                uploader = _first_non_empty(author.get("name"), author.get("alternateName"))
-            elif isinstance(author, str):
-                uploader = author.strip() or None
-
-            category = _first_non_empty(category, obj.get("articleSection"))
-            tags.extend(_as_list(obj.get("keywords")))
-
-    text_blob = soup.get_text(" ", strip=True)
-    if not duration:
-        dm = re.search(r"\b(?:\d{1,2}:){1,2}\d{2}\b", text_blob)
-        if dm:
-            duration = dm.group(0)
-    if not views:
-        views = _extract_views_from_container(soup)
-    if not views:
-        views = _extract_views_text(text_blob)
-
-    tags = list(dict.fromkeys([t for t in tags if t]))
     video = _extract_streams(soup, html, url)
 
     return {
         "url": url,
         "title": title,
-        "description": description,
-        "thumbnail_url": thumbnail,
-        "duration": duration,
+        "thumbnail_url": _first_non_empty(_meta(soup, prop="og:image"), _meta(soup, name="twitter:image")),
         "views": views,
-        "uploader_name": uploader,
-        "category": category,
-        "tags": tags,
-        "upload_date": upload_date,
+        "duration": duration,
         "video": video,
         "related_videos": [],
         "preview_url": None,
@@ -635,31 +499,14 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
         if not thumb:
             continue
 
-        title = a.get("title") or (img.get("alt") if img else None) or a.get_text(" ", strip=True)
-        title = _clean_title(title) or "Unknown Video"
-
-        ctext = container.get_text(" ", strip=True) if container else ""
-        duration = None
-        views = None
-
-        dm = re.search(r"\b(?:\d{1,2}:){1,2}\d{2}\b", ctext)
-        if dm:
-            duration = dm.group(0)
-
-        views = _extract_views_from_container(container)
-        if not views:
-            views = _extract_views_text(ctext)
+        title = _clean_title(a.get("title") or (img.get("alt") if img else None) or a.get_text(" ", strip=True)) or "Unknown Video"
 
         seen.add(href)
-        items.append(
-            {
-                "url": href,
-                "title": title,
-                "thumbnail_url": thumb,
-                "duration": duration,
-                "views": views,
-                "uploader_name": None,
-            }
-        )
+        items.append({
+            "url": href,
+            "title": title,
+            "thumbnail_url": thumb,
+            "uploader_name": None,
+        })
 
     return items[:limit]
