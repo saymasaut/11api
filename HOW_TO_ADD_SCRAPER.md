@@ -1887,3 +1887,81 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=zeenite"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://zeenite.com/videos/215600/dance-kabyle-chaude-9a7ba-de-tizi-ouazou/"
 ```
+
+## 85PO Implementation Notes
+
+[85PO](https://www.85po.com/) is a KVS-style tube site (Chinese UI). Video pages use `/v/{id}/{slug}/` and expose progressive MP4 via same-origin `/get_file/...` URLs (often `_720p`, `_1080p`, and a basename `source` tier).
+
+Use `zeenite` and `pimpbunny` as close implementation references (module folder name is `po85` because Python identifiers cannot start with a digit).
+
+### Host aliases
+
+- `85po.com`
+- `www.85po.com`
+
+Example:
+
+```python
+def can_handle(host: str) -> bool:
+    h = (host or "").lower().split(":")[0]
+    if h.startswith("www."):
+        h = h[4:]
+    return h == "85po.com" or h.endswith(".85po.com")
+```
+
+### Listing and pagination (`list_videos`)
+
+- Video URLs: `https://www.85po.com/v/{id}/{slug}/`
+- Parse only the main list block (not the “watching now” sidebar):
+  - home / default: `#list_videos_most_recent_videos`
+  - `/4k/`: `#list_videos_latest_videos_list`
+  - `/tags/...`: `#list_videos_common_videos_list`
+- Pagination uses query param `from` (page 2 → `?from=2`), not `?page=`. AJAX `#more` blocks exist but GET `?from={n}` is sufficient for the API list endpoint.
+
+### Metadata and streams (`scrape`)
+
+- Metadata: `og:*`, `h1`, visible duration (`mm:ss` / `hh:mm:ss`), views from `.views` or card text.
+- Streams: inline `/get_file/.../*.mp4` links in HTML; filter screenshot/preview assets (`preview_preview.mp4.jpg`, `/contents/videos_screenshots/`).
+- Resolve each `get_file` URL with the video page as `Referer` (HEAD/GET + `Range`) to the signed CDN redirect before returning `video.streams` (same pattern as Zeenite).
+- Prefer highest `NNNp` MP4 as `video.default`.
+
+### Categories (`get_categories`)
+
+Seed `categories.json` from public nav: Home, 4K (`/4k/`), Tags (`/tags/`), Random (`/random_video.php`).
+
+### Registration checklist for 85PO
+
+Besides creating `backend/app/scrapers/po85/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=po85` or `source=85po`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host/unsupported-host help text
+  - stream quality map host checks for `85po.com`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="po85"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### 85PO verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://www.85po.com/v/30261/zi-cuo-ri--5/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://www.85po.com/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=po85"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://www.85po.com/v/30261/zi-cuo-ri--5/"
+```
