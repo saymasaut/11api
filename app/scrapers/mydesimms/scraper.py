@@ -175,6 +175,60 @@ def _quality_from_url(url: str, *, fallback: str = "source") -> str:
     return fallback
 
 
+_KNOWN_EMBED_HOST_MARKERS = (
+    "luluvid",
+    "lulustream",
+    "hrnyvid",
+    "streamtape",
+    "dood",
+    "doodstream",
+    "mixdrop",
+    "upstream",
+    "vidhide",
+    "sbplay",
+    "streamsb",
+    "urshort",
+    "byseraguci",
+    "voe.sx",
+    "vidnest",
+    "rpmplay",
+    "embedseek",
+    "seekplayer",
+    "easyvidplayer",
+    "player4me",
+    "frdl",
+    "hxfile",
+)
+
+
+def _embed_host(url: str) -> str:
+    try:
+        host = (urlparse(url).netloc or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        return host
+    except Exception:
+        return ""
+
+
+def _quality_from_embed_url(url: str, *, fallback_idx: int = 1) -> str:
+    low = (url or "").lower()
+    for marker in _KNOWN_EMBED_HOST_MARKERS:
+        if marker in low:
+            return marker.replace(".", "_")
+    host = _embed_host(url)
+    if host:
+        return host.split(".")[0] if "." in host else host
+    return f"Server {fallback_idx}"
+
+
+def _is_mydesimms_host(host: str) -> bool:
+    h = (host or "").lower()
+    if h.startswith("www."):
+        h = h[4:]
+    return h == "mydesimms.watch" or h.endswith(".mydesimms.watch")
+
+
 def _normalize_media_url(src: str, base: str = "https://mydesimms.watch/") -> Optional[str]:
     u = (src or "").strip()
     if not u:
@@ -211,24 +265,59 @@ def _is_probable_ad_iframe(src: str) -> bool:
 
 
 def _is_probable_playable_embed(src: str) -> bool:
+    """Accept third-party players (e.g. luluvid.com/e/…) and known embed hosts."""
     s = (src or "").strip()
     if not s:
         return False
     low = s.lower()
     if _is_probable_ad_iframe(low):
         return False
-    return any(
+    if not (s.startswith("http") or s.startswith("//")):
+        return False
+
+    if any(marker in low for marker in _KNOWN_EMBED_HOST_MARKERS):
+        return True
+
+    if any(
         marker in low
         for marker in (
             "/embed/",
+            "/e/",
             "player",
             "stream",
             ".m3u8",
             ".mp4",
             "video",
-            "iframe",
         )
-    )
+    ):
+        return True
+
+    # Cross-origin iframe without a known path (e.g. luluvid.com/e/abc) — typical WP player embed.
+    try:
+        parsed = urlparse(s if s.startswith("http") else f"https:{s}")
+        host = (parsed.netloc or "").lower()
+        path = (parsed.path or "").lower()
+        if _is_mydesimms_host(host):
+            return False
+        if any(path.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".css", ".js")):
+            return False
+        if host and path and path not in ("/",):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _is_probable_embed_link(href: str) -> bool:
+    """Tab/player links in post body — stricter than iframe (no blanket external hosts)."""
+    low = (href or "").lower()
+    if _is_probable_ad_iframe(low):
+        return False
+    if not (href or "").strip().startswith("http"):
+        return False
+    if any(marker in low for marker in _KNOWN_EMBED_HOST_MARKERS):
+        return True
+    return any(marker in low for marker in ("/embed/", "/e/", "player", "stream", ".m3u8", ".mp4"))
 
 
 def _decode_tubeserver_url(src: str) -> Optional[str]:
@@ -313,6 +402,21 @@ def _normalize_video_href(href: str) -> Optional[str]:
     return urlunparse(("https", "mydesimms.watch", clean_path if clean_path.endswith("/") else clean_path + "/", "", "", ""))
 
 
+def _collect_player_iframes(soup: BeautifulSoup) -> list[Any]:
+    """Prefer post/player iframes over site-wide ad iframes."""
+    for selector in (
+        ".entry-content iframe[src]",
+        ".post-content iframe[src]",
+        "article iframe[src]",
+        ".wp-block-embed iframe[src]",
+        "#content iframe[src]",
+    ):
+        found = soup.select(selector)
+        if found:
+            return found
+    return soup.select("iframe[src]")
+
+
 def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
     streams: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -336,7 +440,7 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
         streams.append({"url": src, "quality": _quality_from_url(src), "format": "hls" if ".m3u8" in src.lower() else "mp4"})
 
     server_idx = 1
-    for iframe in soup.select("iframe[src]"):
+    for iframe in _collect_player_iframes(soup):
         iframe_src = _normalize_media_url(iframe.get("src") or "")
         if not iframe_src:
             continue
@@ -349,7 +453,27 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
         if iframe_src in seen or not _is_probable_playable_embed(iframe_src):
             continue
         seen.add(iframe_src)
-        streams.append({"url": iframe_src, "quality": f"Server {server_idx}", "format": "embed"})
+        streams.append(
+            {
+                "url": iframe_src,
+                "quality": _quality_from_embed_url(iframe_src, fallback_idx=server_idx),
+                "format": "embed",
+            }
+        )
+        server_idx += 1
+
+    for a in soup.select(".entry-content a[href], .post-content a[href], article a[href]"):
+        href = _normalize_media_url(a.get("href") or "")
+        if not href or href in seen or not _is_probable_embed_link(href):
+            continue
+        seen.add(href)
+        streams.append(
+            {
+                "url": href,
+                "quality": _quality_from_embed_url(href, fallback_idx=server_idx),
+                "format": "embed",
+            }
+        )
         server_idx += 1
 
     for tag in soup.select("meta[itemprop='embedURL'][content]"):
@@ -357,7 +481,13 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
         if not embed_url or embed_url in seen or not _is_probable_playable_embed(embed_url):
             continue
         seen.add(embed_url)
-        streams.append({"url": embed_url, "quality": f"Server {server_idx}", "format": "embed"})
+        streams.append(
+            {
+                "url": embed_url,
+                "quality": _quality_from_embed_url(embed_url, fallback_idx=server_idx),
+                "format": "embed",
+            }
+        )
         server_idx += 1
 
     for m in re.finditer(r"iframeSrc\s*=\s*['\"]([^'\"]+)['\"]", html, flags=re.IGNORECASE):
@@ -365,7 +495,13 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
         if not embed_url or embed_url in seen or not _is_probable_playable_embed(embed_url):
             continue
         seen.add(embed_url)
-        streams.append({"url": embed_url, "quality": f"Server {server_idx}", "format": "embed"})
+        streams.append(
+            {
+                "url": embed_url,
+                "quality": _quality_from_embed_url(embed_url, fallback_idx=server_idx),
+                "format": "embed",
+            }
+        )
         server_idx += 1
 
     for btn in soup.select("#server-buttons [data-src], .server-btn[data-src]"):
@@ -373,7 +509,13 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
         if not embed_url or embed_url in seen or not _is_probable_playable_embed(embed_url):
             continue
         seen.add(embed_url)
-        streams.append({"url": embed_url, "quality": f"Server {server_idx}", "format": "embed"})
+        streams.append(
+            {
+                "url": embed_url,
+                "quality": _quality_from_embed_url(embed_url, fallback_idx=server_idx),
+                "format": "embed",
+            }
+        )
         server_idx += 1
 
     def _score(item: dict[str, str]) -> tuple[int, int]:
@@ -394,9 +536,20 @@ def _extract_streams(soup: BeautifulSoup, html: str) -> dict[str, Any]:
 
     default_url = None
     for fmt in ("mp4", "hls", "embed"):
-        match = next((s for s in materialized if s.get("format") == fmt), None)
-        if match:
-            default_url = match.get("url")
+        candidates = [s for s in materialized if s.get("format") == fmt]
+        if not candidates:
+            continue
+        if fmt == "embed":
+            for pref in ("luluvid", "lulustream", "hrnyvid", "streamtape", "dood"):
+                match = next((s for s in candidates if pref in (s.get("url") or "").lower()), None)
+                if match:
+                    default_url = match.get("url")
+                    break
+            if not default_url:
+                default_url = candidates[0].get("url")
+        else:
+            default_url = candidates[0].get("url")
+        if default_url:
             break
 
     hls_url = next((s.get("url") for s in materialized if s.get("format") == "hls"), None)
