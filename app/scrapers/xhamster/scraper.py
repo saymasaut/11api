@@ -73,6 +73,54 @@ def _meta(soup: BeautifulSoup, *, prop: str | None = None, name: str | None = No
     return None
 
 
+def _parse_balanced_json(html: str, start: int) -> Any | None:
+    """Parse JSON object/array from a specific offset with nesting awareness."""
+    if start < 0 or start >= len(html):
+        return None
+    opener = html[start]
+    if opener not in "{[":
+        return None
+    closer = "}" if opener == "{" else "]"
+
+    depth = 0
+    in_string = False
+    escape = False
+
+    for i in range(start, len(html)):
+        ch = html[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == opener:
+            depth += 1
+        elif ch == closer:
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(html[start : i + 1])
+                except Exception:
+                    return None
+    return None
+
+
+def _extract_initials_data(html: str) -> dict[str, Any]:
+    """Extract `window.initials` JSON safely without regex-brace truncation."""
+    m = re.search(r"window\.initials\s*=\s*\{", html)
+    if not m:
+        return {}
+    parsed = _parse_balanced_json(html, m.end() - 1)
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _parse_json_ld(soup: BeautifulSoup) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
@@ -386,11 +434,8 @@ def _extract_video_data(html: str) -> dict[str, Any]:
     hls_url = None
     
     try:
-        # Regex to find window.initials = { ... }
-        match = re.search(r'window\.initials\s*=\s*({.+?});', html, re.DOTALL)
-        if match:
-            initials_json = match.group(1)
-            data = json.loads(initials_json)
+        data = _extract_initials_data(html)
+        if data:
             
             # Navigate to video model
             # Structure usually: xplayerSettings -> sources -> standard / hls
@@ -509,8 +554,8 @@ def _extract_video_data(html: str) -> dict[str, Any]:
         if "240" in q: return 240
         return 0
         
-    # Filter streams to keep ONLY 'hls' format
-    streams = [s for s in streams if s.get("format") == "hls"]
+    # Keep both HLS and MP4; some pages expose MP4 only.
+    streams = [s for s in streams if s.get("format") in ("hls", "mp4")]
 
     # Deduplicate streams based on URL
     unique_urls = set()
@@ -589,12 +634,10 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 20) -> list[dic
     seen: set[str] = set()
 
     # Attempt to extract from window.initials
-    initials_match = re.search(r"window\.initials\s*=\s*({.+?});", html, re.DOTALL)
     video_props = []
-    if initials_match:
+    data = _extract_initials_data(html)
+    if data:
         try:
-            data = json.loads(initials_match.group(1))
-            
             # Possible paths for videoThumbProps
             paths = [
                 data.get("layoutPage", {}).get("videoListProps", {}).get("videoThumbProps", []),
@@ -777,6 +820,8 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 20) -> list[dic
                 }
             )
 
+    if effective_limit is not None:
+        return items[:effective_limit]
     return items
 
 
