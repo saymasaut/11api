@@ -1912,6 +1912,7 @@ def can_handle(host: str) -> bool:
 ### Listing and pagination (`list_videos`)
 
 - Video URLs: `https://www.85po.com/v/{id}/{slug}/`
+- Embed player: `https://www.85po.com/embed/{id}` (iframe shell; also exposes `/get_file/` MP4 tiers inside)
 - Parse only the main list block (not the “watching now” sidebar):
   - home / default: `#list_videos_most_recent_videos`
   - `/4k/`: `#list_videos_latest_videos_list`

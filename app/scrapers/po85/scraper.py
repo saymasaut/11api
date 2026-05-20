@@ -162,18 +162,39 @@ def _list_root(soup: BeautifulSoup, base_url: str) -> Any:
     return soup.select_one(f"#{section_id}") or soup.select_one(f"#{section_id}_items")
 
 
+def _is_embed_page_url(url: str) -> bool:
+    path = (urlparse(url).path or "").lower()
+    return bool(re.fullmatch(r"/embed/\d+/?", path))
+
+
+def _embed_player_url(video_id: str) -> str:
+    return f"https://www.{SITE_HOST}/embed/{video_id}"
+
+
 def _detect_media_format(url: str) -> Optional[str]:
     low = (url or "").lower()
     path = urlparse(url).path.lower() if url else ""
+    if _is_blocked_stream_url(url):
+        return None
     if "/get_file/" in low:
         return "mp4"
     if path.endswith(".m3u8"):
         return "hls"
     if path.endswith(".mp4") or ".mp4?" in low:
         return "mp4"
-    if "/embed/" in low:
-        return "embed"
     return None
+
+
+def _is_blocked_stream_url(url: str) -> bool:
+    """Drop ads, player chrome, and same-site /embed/ page shells (added explicitly)."""
+    low = (url or "").lower()
+    if _is_non_video_asset_url(url) or _is_probable_ad_iframe(url):
+        return True
+    if any(x in low for x in ("/player/html.php", "/player/stats.php", "preview.mp4.jpg")):
+        return True
+    if re.search(r"85po\.com/embed/\d+/?(?:\?|$)", low):
+        return True
+    return False
 
 
 def _is_non_video_asset_url(url: str) -> bool:
@@ -251,7 +272,7 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
             href = urljoin(page_url, href)
         if not href.startswith("http") or href in seen:
             continue
-        if _is_probable_ad_iframe(href) or _is_non_video_asset_url(href):
+        if _is_blocked_stream_url(href):
             continue
         fmt = _detect_media_format(href)
         if not fmt:
@@ -334,6 +355,13 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
             break
 
     hls_url = next((s.get("url") for s in materialized if s.get("format") == "hls"), None)
+
+    video_id = _extract_video_id(page_url)
+    if video_id:
+        embed_url = _embed_player_url(video_id)
+        if not any(s.get("url") == embed_url for s in materialized):
+            materialized.append({"url": embed_url, "quality": "85po", "format": "embed"})
+
     return {
         "streams": materialized,
         "hls": hls_url,
@@ -391,8 +419,35 @@ async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Op
 
 
 def _extract_video_id(url: str) -> Optional[str]:
-    m = re.search(r"/v/(\d+)/", url or "", flags=re.IGNORECASE)
+    m = re.search(r"/(?:v|embed)/(\d+)/?", url or "", flags=re.IGNORECASE)
     return m.group(1) if m else None
+
+
+def _find_canonical_video_page_url(soup: BeautifulSoup, html: str, video_id: str) -> Optional[str]:
+    vid = str(video_id).strip()
+    if not vid:
+        return None
+    for a in soup.select("a[href]"):
+        href = _normalize_video_href(a.get("href") or "")
+        if href and re.search(rf"/v/{re.escape(vid)}/", href, flags=re.IGNORECASE):
+            return href
+    m = re.search(rf"https?://(?:www\.)?{re.escape(SITE_HOST)}/v/{re.escape(vid)}/[^\"'\s<>]+/?", html, flags=re.IGNORECASE)
+    if m:
+        return _normalize_video_href(m.group(0))
+    return None
+
+
+def _ensure_embed_stream(video: dict[str, Any], video_id: str) -> None:
+    """Expose the site's iframe player (e.g. https://www.85po.com/embed/30)."""
+    embed_url = _embed_player_url(video_id)
+    streams: list[dict[str, str]] = video.get("streams") or []
+    if any(s.get("url") == embed_url for s in streams):
+        return
+    streams.append({"url": embed_url, "quality": "85po", "format": "embed"})
+    video["streams"] = streams
+    if not video.get("default"):
+        video["default"] = embed_url
+    video["has_video"] = True
 
 
 def _url_contains_video_id(url: str, video_id: str) -> bool:
@@ -508,8 +563,35 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
 
 async def scrape(url: str) -> dict[str, Any]:
     html = await fetch_page(url, referer=url)
-    data = parse_video_page(html, url)
+    video_id = _extract_video_id(url)
+    soup = BeautifulSoup(html, "lxml")
+
+    if _is_embed_page_url(url) and video_id:
+        canonical = _find_canonical_video_page_url(soup, html, video_id)
+        if canonical:
+            try:
+                full_html = await fetch_page(canonical, referer=url)
+                data = parse_video_page(full_html, url)
+            except Exception:
+                data = parse_video_page(html, url)
+        else:
+            data = parse_video_page(html, url)
+        if video_id:
+            _ensure_embed_stream(data.get("video", {}), video_id)
+    else:
+        data = parse_video_page(html, url)
+
     await _resolve_video_streams_to_remote_playable(data.get("video", {}), referer=url)
+
+    # When opened via /embed/{id}, prefer the embed player as default if no direct MP4 survived resolve.
+    if _is_embed_page_url(url) and video_id:
+        video = data.get("video", {})
+        mp4s = [s for s in (video.get("streams") or []) if s.get("format") == "mp4"]
+        embed_url = _embed_player_url(video_id)
+        if not mp4s:
+            video["default"] = embed_url
+        video["has_video"] = bool(video.get("streams"))
+
     return data
 
 
