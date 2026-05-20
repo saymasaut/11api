@@ -300,7 +300,8 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
         "zeenite.com" in parsed_url.netloc.lower() or
         "uncutmaza.com" in parsed_url.netloc.lower() or
         "uncutmazaa.com" in parsed_url.netloc.lower() or
-        "uncutmaza.cc" in parsed_url.netloc.lower()):
+        "uncutmaza.cc" in parsed_url.netloc.lower() or
+        "mydesimms.watch" in parsed_url.netloc.lower()):
         qualities: dict[str, Any] = {}
         all_streams = video_data.get("streams", [])
         host_l = parsed_url.netloc.lower()
@@ -326,6 +327,7 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
             or "uncutmaza.com" in host_l
             or "uncutmazaa.com" in host_l
             or "uncutmaza.cc" in host_l
+            or "mydesimms.watch" in host_l
         )
         
         # Debug logging for RedTube

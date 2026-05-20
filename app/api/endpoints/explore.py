@@ -385,7 +385,7 @@ EXPLORE_SOURCES = [
         category="porn",
         isVerified=False,
         hasCategories=True,
-        searchUrlTemplate="",
+        searchUrlTemplate="https://mydesimms.watch/?s={query}",
         sourceId="mydesimms",
         disable=False,
         pageSize=30,
