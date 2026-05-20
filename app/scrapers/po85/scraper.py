@@ -230,17 +230,64 @@ def _extract_inline_urls(html: str) -> list[str]:
     return list(dict.fromkeys(urls))
 
 
+def _get_file_tier_key(url: str) -> Optional[str]:
+    """Group /get_file/ variants for the same file (different tokens/query)."""
+    low = (url or "").lower()
+    m = re.search(r"/(\d+)_(\d{3,4})p\.mp4", low)
+    if m:
+        return f"{m.group(1)}:{m.group(2)}p"
+    m = re.search(r"/(\d+)\.mp4", low)
+    if m:
+        return f"{m.group(1)}:source"
+    return None
+
+
+def _get_file_url_priority(url: str) -> int:
+    """
+    Prefer download links (302 -> CDN). Player ?br= tokens often 404.
+    """
+    low = (url or "").lower()
+    if "download=true" in low and "download_filename" in low:
+        return 100
+    if "download=true" in low:
+        return 80
+    if re.search(r"/get_file/1/", low):
+        return 50
+    if "br=" in low and "download_filename" not in low:
+        return 5
+    return 20
+
+
+def _prefer_playable_get_file_streams(streams: list[dict[str, str]]) -> list[dict[str, str]]:
+    get_file_mp4 = [s for s in streams if s.get("format") == "mp4" and "get_file" in (s.get("url") or "")]
+    if not get_file_mp4:
+        return streams
+    other = [s for s in streams if s not in get_file_mp4]
+    by_tier: dict[str, list[dict[str, str]]] = {}
+    for s in get_file_mp4:
+        tier = _get_file_tier_key(s["url"] or "") or s["url"] or ""
+        by_tier.setdefault(tier, []).append(s)
+    picked: list[dict[str, str]] = []
+    for items in by_tier.values():
+        best = max(items, key=lambda x: _get_file_url_priority(x.get("url") or ""))
+        url = best.get("url") or ""
+        best["quality"] = _stream_quality_from_url(url)
+        picked.append(best)
+    return other + picked
+
+
 def _stream_quality_from_url(url: str) -> str:
     low = (url or "").lower()
-    q = re.search(r"([1-9]\d{2,3})p", low)
+    q = re.search(r"_(\d{3,4})p\.mp4", low)
     if q:
+        return f"{q.group(1)}p"
+    if re.search(r"/\d+\.mp4", low) and not re.search(r"_\d{3,4}p\.mp4", low):
+        return "source"
+    q = re.search(r"(\d{3,4})p", low)
+    if q and "download_filename" in low:
         return f"{q.group(1)}p"
     if _detect_media_format(url) == "hls":
         return "adaptive"
-    if "/get_file/" in low and "br=" in low:
-        br = re.search(r"[?&]br=(\d+)", low)
-        if br:
-            return f"{br.group(1)}k"
     return "source"
 
 
@@ -345,6 +392,7 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
 
     uniq = list(dict.fromkeys((json.dumps(s, sort_keys=True) for s in streams)))
     materialized = [json.loads(s) for s in uniq]
+    materialized = _prefer_playable_get_file_streams(materialized)
     materialized.sort(key=_score, reverse=True)
 
     default_url = None
@@ -401,6 +449,9 @@ async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Op
         return None
 
     attempts = [
+        (get_file_url, "HEAD", None),
+        (get_file_url, "GET", "bytes=0-"),
+        (get_file_url, "GET", "bytes=0-0"),
         (f"{base}/", "HEAD", None),
         (f"{base}/", "GET", "bytes=0-"),
         (f"{base}/", "GET", "bytes=0-0"),
