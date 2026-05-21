@@ -2639,3 +2639,70 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=tianmei"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://www.94mt.cc/index.php/vod/play/id/25106/sid/1/nid/1.html"
 ```
+
+## BindasMood (bindasmood.com) Implementation Notes
+
+[BindasMood](https://bindasmood.com/) is a WordPress site using the **UltimaTube** theme. Video posts use root-level slugs (not `/video/` paths). Listing uses `article.thumb-block` cards; streams are usually direct **MP4** URLs on CDN hosts (e.g. `ixifile.xyz`) embedded in post HTML, with an optional **clean-tube-player** iframe fallback.
+
+### Host aliases
+
+- `bindasmood.com`
+- `www.bindasmood.com`
+
+### Listing and pagination (`list_videos`)
+
+- Home: `https://bindasmood.com/`
+- Sort filters: `?filter=latest`, `?filter=popular`, `?filter=most-viewed`, `?filter=longest`, `?filter=random`
+- Taxonomy indexes: `/categories/`, `/tags/`, `/actors/` (and `/category/{slug}/`, `/tag/{slug}/`, `/actor/{slug}/` for filtered lists)
+- Parse `article.thumb-block` → link `a[href]`; title from `span.title a`; thumb `img`; `span.duration`, `span.views`
+- Pagination: WordPress `/page/{n}/` (e.g. `https://bindasmood.com/page/2/`); query preserved on filtered home URLs
+
+### Metadata and streams (`scrape`)
+
+- Canonical post URL: `https://bindasmood.com/{slug}/` (single hyphenated slug segment)
+- Reject reserved paths: `categories`, `tags`, `actors`, `category`, `tag`, `actor`, `page`, `wp-content`, etc.
+- Streams: regex `.mp4` / `.m3u8` from post HTML; if none, fetch `clean-tube-player` iframe (`player-x.php`) and retry; last resort `format: embed` on iframe `src`
+- Title/thumb from `og:title`, `og:image`, `h1`
+
+### Categories (`get_categories`)
+
+Home, Newest (`?filter=latest`), Best, Most Viewed, Longest, plus taxonomy index links in `categories.json`.
+
+### Registration checklist for BindasMood
+
+Besides creating `backend/app/scrapers/bindasmood/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=bindasmood` or `source=bindas`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `bindasmood.com`, `ixifile.xyz`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="bindasmood"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### BindasMood verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://bindasmood.com/valentine-date-2026-hindi-uncut-xxx-video/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://bindasmood.com/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://bindasmood.com/page/2/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=bindasmood"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://bindasmood.com/valentine-date-2026-hindi-uncut-xxx-video/"
+```

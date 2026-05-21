@@ -99,6 +99,7 @@ class ScrapeRequest(BaseModel):
             "missav.ai",
             "jable.tv",
             "94mt.cc",
+            "bindasmood.com",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v
@@ -191,6 +192,7 @@ class ListRequest(BaseModel):
             "missav.ai",
             "jable.tv",
             "94mt.cc",
+            "bindasmood.com",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v

@@ -1,0 +1,10 @@
+[
+  { "id": "home", "name": "Home", "url": "https://bindasmood.com/" },
+  { "id": "latest", "name": "Newest", "url": "https://bindasmood.com/?filter=latest" },
+  { "id": "popular", "name": "Best", "url": "https://bindasmood.com/?filter=popular" },
+  { "id": "most-viewed", "name": "Most Viewed", "url": "https://bindasmood.com/?filter=most-viewed" },
+  { "id": "longest", "name": "Longest", "url": "https://bindasmood.com/?filter=longest" },
+  { "id": "categories", "name": "Categories", "url": "https://bindasmood.com/categories/" },
+  { "id": "tags", "name": "Tags", "url": "https://bindasmood.com/tags/" },
+  { "id": "actors", "name": "Actors", "url": "https://bindasmood.com/actors/" }
+]
