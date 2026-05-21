@@ -293,10 +293,10 @@ def _extract_kt_player_urls(html: str, page_url: str) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     seen: set[str] = set()
     quality_map = {
-        "video_url": "default",
-        "video_url_text": "default",
-        "video_alt_url": "alt",
-        "video_alt_url2": "alt2",
+        "video_url": "source",
+        "video_url_text": "source",
+        "video_alt_url": "source",
+        "video_alt_url2": "source",
     }
     for pattern in _KT_PATTERNS:
         for m in re.finditer(pattern, html):
@@ -316,9 +316,11 @@ def _extract_kt_player_urls(html: str, page_url: str) -> list[tuple[str, str]]:
 
 
 def _stream_quality_from_url(url: str, *, label: str | None = None) -> str:
-    if label and label not in ("default", "alt", "alt2", "source"):
+    if label and label not in ("default", "alt", "alt2", "source", "porntrex"):
         return label
     low = (url or "").lower()
+    if f"{SITE_HOST}/embed/" in low:
+        return "porntrex"
     if _is_preview_media_url(url):
         return "preview"
     q = re.search(r"([1-9]\d{2,3})p", low)
@@ -336,7 +338,49 @@ def _stream_quality_from_url(url: str, *, label: str | None = None) -> str:
         return "480p"
     if _detect_media_format(url) == "hls":
         return "adaptive"
+    if label in ("default", "alt", "alt2") or _detect_media_format(url) in ("mp4", "hls"):
+        return "source"
     return label or "source"
+
+
+def _canonical_embed_url(url: str) -> str:
+    parsed = urlparse(url)
+    path = (parsed.path or "").rstrip("/")
+    return urlunparse((parsed.scheme, parsed.netloc, path + "/", "", "", ""))
+
+
+def _finalize_porntrex_streams(streams: list[dict[str, str]]) -> list[dict[str, str]]:
+    """
+    Expose a stable stream catalog for the stream API:
+    - source (+ source_format): direct MP4/HLS
+    - porntrex (+ porntrex_format): native embed player
+    """
+    source_url: Optional[str] = None
+    source_fmt: str = "mp4"
+    embed_url: Optional[str] = None
+
+    for item in streams:
+        url = (item.get("url") or "").strip()
+        if not url:
+            continue
+        fmt = (item.get("format") or "").lower()
+        low = url.lower()
+
+        if fmt == "embed" or f"{SITE_HOST}/embed/" in low:
+            embed_url = _canonical_embed_url(url)
+            continue
+
+        if fmt in ("mp4", "hls") and not _is_preview_media_url(url):
+            if source_url is None or fmt == "mp4":
+                source_url = url
+                source_fmt = fmt
+
+    catalog: list[dict[str, str]] = []
+    if source_url:
+        catalog.append({"url": source_url, "quality": "source", "format": source_fmt})
+    if embed_url:
+        catalog.append({"url": embed_url, "quality": "porntrex", "format": "embed"})
+    return catalog
 
 
 def _embed_page_url(video_id: str) -> str:
@@ -459,6 +503,8 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
         if _is_non_video_asset_url(href) or _is_probable_ad_iframe(href):
             continue
         fmt = _detect_media_format(href)
+        if fmt == "embed" and f"{SITE_HOST}/embed/" in href.lower():
+            continue
         if href.startswith("http") and href not in seen and fmt:
             seen.add(href)
             streams.append(
@@ -508,36 +554,23 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
         )
 
     native_embed = _extract_native_embed_url(html, video_url)
-    if native_embed and native_embed not in seen:
-        seen.add(native_embed)
-        streams.append({"url": native_embed, "quality": "porntrex", "format": "embed"})
-
-    def _score(item: dict[str, str]) -> tuple[int, int]:
-        fmt = (item.get("format") or "").lower()
-        stream_url = item.get("url") or ""
-        qtxt = item.get("quality") or ""
-        q = re.search(r"(\d{3,4})", qtxt)
-        qnum = int(q.group(1)) if q else 0
-        if fmt == "mp4":
-            return (2, qnum) if _is_preview_media_url(stream_url) else (3, qnum)
-        if fmt == "hls":
-            return (2, qnum)
-        if fmt == "embed" and f"{SITE_HOST}/embed/" in stream_url.lower():
-            return (1, 1)
-        return (1, 0)
+    if native_embed:
+        canon_embed = _canonical_embed_url(native_embed)
+        if canon_embed not in seen:
+            seen.add(canon_embed)
+            streams.append({"url": canon_embed, "quality": "porntrex", "format": "embed"})
 
     uniq = list(dict.fromkeys(json.dumps(s, sort_keys=True) for s in streams))
-    materialized = [json.loads(s) for s in uniq]
-    materialized.sort(key=_score, reverse=True)
+    materialized = _finalize_porntrex_streams([json.loads(s) for s in uniq])
 
-    default_url = None
-    for preferred in ("mp4", "hls", "embed"):
-        match = next((s for s in materialized if s.get("format") == preferred), None)
-        if match:
-            default_url = match.get("url")
-            break
+    default_url = next((s.get("url") for s in materialized if s.get("quality") == "source"), None)
+    if not default_url:
+        default_url = next((s.get("url") for s in materialized if s.get("format") == "embed"), None)
 
-    hls_url = next((s.get("url") for s in materialized if s.get("format") == "hls"), None)
+    hls_url = next(
+        (s.get("url") for s in materialized if s.get("format") == "hls" and s.get("quality") == "source"),
+        None,
+    )
     return {
         "streams": materialized,
         "hls": hls_url,
