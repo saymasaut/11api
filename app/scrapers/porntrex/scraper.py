@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 import httpx
 from bs4 import BeautifulSoup
 
-from app.core.pool import fetch_html as pool_fetch_html
+from app.core.pool import fetch_html as pool_fetch_html, get_random_user_agent
 
 BASE_SITE = "https://www.porntrex.com/"
 SITE_HOST = "porntrex.com"
@@ -92,13 +92,20 @@ def _is_homepage_listing(base_url: str) -> bool:
     return path in _HOMEPAGE_PATHS
 
 
-async def fetch_page(url: str, *, referer: str | None = None) -> str:
-    headers = dict(_DEFAULT_HEADERS)
+def _browser_headers(*, referer: str | None = None, accept: str | None = None) -> dict[str, str]:
     ref = _normalize_site_url(referer or BASE_SITE)
+    headers = dict(_DEFAULT_HEADERS)
+    headers["User-Agent"] = get_random_user_agent()
     headers["Referer"] = ref
     headers["Sec-Fetch-Site"] = "same-origin" if SITE_HOST in ref else "cross-site"
+    if accept:
+        headers["Accept"] = accept
+    return headers
+
+
+async def fetch_page(url: str, *, referer: str | None = None) -> str:
     target = _normalize_site_url(url)
-    return await pool_fetch_html(target, headers=headers)
+    return await pool_fetch_html(target, headers=_browser_headers(referer=referer))
 
 
 def _first_non_empty(*values: Optional[str]) -> Optional[str]:
@@ -588,13 +595,7 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
 async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Optional[str]:
     base = get_file_url.split("?", 1)[0].strip().rstrip("/")
     ref = referer.strip() if referer.strip().startswith("http") else BASE_SITE
-    headers = {
-        "User-Agent": _DEFAULT_HEADERS["User-Agent"],
-        "Referer": ref,
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Cookie": _DEFAULT_HEADERS.get("Cookie", ""),
-    }
+    headers = _browser_headers(referer=ref, accept="*/*")
 
     async def _attempt(url: str, method: str, range_hdr: Optional[str]) -> Optional[str]:
         h = dict(headers)
