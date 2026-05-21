@@ -17,15 +17,25 @@ SITE_HOST = "porntrex.com"
 SITE_ALIASES = frozenset({"porntrex.com", "www.porntrex.com"})
 
 _DEFAULT_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-    ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate",
     "Referer": BASE_SITE,
-    "Cookie": "age_pass=1",
+    "Origin": "https://www.porntrex.com",
+    "DNT": "1",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "sec-ch-ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "Cookie": "age_pass=1; accessAgeDisclaimerPH=1; accessAgeDisclaimerUK=1",
 }
+
+_HOMEPAGE_PATHS = frozenset({"", "/", "//"})
+_LIST_FALLBACK_PATH = "/latest-updates"
 
 _VIDEO_PATH_RE = re.compile(r"^/video/(\d+)/[^/]+/?$", re.IGNORECASE)
 _VIDEO_HREF_RE = re.compile(
@@ -56,10 +66,39 @@ def get_categories() -> list[dict]:
         return []
 
 
+def _normalize_site_url(url: str) -> str:
+    """Collapse duplicate path slashes (e.g. https://www.porntrex.com//)."""
+    parsed = urlparse((url or "").strip())
+    path = parsed.path or "/"
+    while "//" in path:
+        path = path.replace("//", "/")
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return urlunparse(
+        (
+            parsed.scheme or "https",
+            parsed.netloc or f"www.{SITE_HOST}",
+            path,
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+
+
+def _is_homepage_listing(base_url: str) -> bool:
+    parsed = urlparse(_normalize_site_url(base_url or BASE_SITE))
+    path = (parsed.path or "/").rstrip("/") or ""
+    return path in _HOMEPAGE_PATHS
+
+
 async def fetch_page(url: str, *, referer: str | None = None) -> str:
     headers = dict(_DEFAULT_HEADERS)
-    headers["Referer"] = referer or BASE_SITE
-    return await pool_fetch_html(url, headers=headers)
+    ref = _normalize_site_url(referer or BASE_SITE)
+    headers["Referer"] = ref
+    headers["Sec-Fetch-Site"] = "same-origin" if SITE_HOST in ref else "cross-site"
+    target = _normalize_site_url(url)
+    return await pool_fetch_html(target, headers=headers)
 
 
 def _first_non_empty(*values: Optional[str]) -> Optional[str]:
@@ -758,26 +797,33 @@ async def scrape(url: str) -> dict[str, Any]:
     return data
 
 
-def _build_list_page_url(base_url: str, page: int) -> str:
+def _build_list_page_url(base_url: str, page: int, *, path_suffix: str = "") -> str:
     raw = (base_url or "").strip() or BASE_SITE
     if not raw.startswith("http"):
         raw = f"{BASE_SITE.rstrip('/')}/{raw.lstrip('/')}"
-    parsed = urlparse(raw)
+    parsed = urlparse(_normalize_site_url(raw))
     page_num = max(1, int(page) if page else 1)
 
-    path = (parsed.path or "/").rstrip("/") or ""
+    path = (parsed.path or "/").rstrip("/")
+    if path in _HOMEPAGE_PATHS:
+        path = ""
+    if path_suffix:
+        path = path_suffix.rstrip("/")
+
     query_items = dict(parse_qsl(parsed.query, keep_blank_values=True))
 
     if page_num <= 1:
-        new_path = path or "/"
-        return urlunparse(
-            (
-                parsed.scheme or "https",
-                parsed.netloc or f"www.{SITE_HOST}",
-                new_path + ("/" if new_path != "/" else "/"),
-                "",
-                urlencode(query_items),
-                "",
+        new_path = f"/{path}/" if path else "/"
+        return _normalize_site_url(
+            urlunparse(
+                (
+                    parsed.scheme or "https",
+                    parsed.netloc or f"www.{SITE_HOST}",
+                    new_path,
+                    "",
+                    urlencode(query_items),
+                    "",
+                )
             )
         )
 
@@ -785,36 +831,57 @@ def _build_list_page_url(base_url: str, page: int) -> str:
         path = re.sub(r"/\d+/?$", "", path)
 
     if "page" not in query_items:
-        new_path = f"{path}/{page_num}" if path else f"/{page_num}"
-        return urlunparse(
+        new_path = f"/{path}/{page_num}" if path else f"/{page_num}"
+        return _normalize_site_url(
+            urlunparse(
+                (
+                    parsed.scheme or "https",
+                    parsed.netloc or f"www.{SITE_HOST}",
+                    new_path + "/",
+                    "",
+                    urlencode(query_items),
+                    "",
+                )
+            )
+        )
+
+    query_items["page"] = str(page_num)
+    new_path = f"/{path}/" if path else "/"
+    return _normalize_site_url(
+        urlunparse(
             (
                 parsed.scheme or "https",
                 parsed.netloc or f"www.{SITE_HOST}",
-                new_path + "/",
+                new_path,
                 "",
                 urlencode(query_items),
                 "",
             )
         )
-
-    query_items["page"] = str(page_num)
-    return urlunparse(
-        (
-            parsed.scheme or "https",
-            parsed.netloc or f"www.{SITE_HOST}",
-            path + "/" if path else "/",
-            "",
-            urlencode(query_items),
-            "",
-        )
     )
 
 
+def _list_page_candidates(base_url: str, page: int) -> list[str]:
+    primary = _build_list_page_url(base_url, page)
+    candidates = [primary]
+    if _is_homepage_listing(base_url):
+        fallback = _build_list_page_url(base_url, page, path_suffix=_LIST_FALLBACK_PATH)
+        if fallback not in candidates:
+            candidates.append(fallback)
+    return candidates
+
+
 async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[dict[str, Any]]:
-    page_url = _build_list_page_url(base_url, page)
-    try:
-        html = await fetch_page(page_url, referer=base_url or BASE_SITE)
-    except Exception:
+    referer = _normalize_site_url(base_url or BASE_SITE)
+    html = ""
+    for page_url in _list_page_candidates(base_url, page):
+        try:
+            html = await fetch_page(page_url, referer=referer)
+            if html and _VIDEO_HREF_RE.search(html):
+                break
+        except Exception:
+            continue
+    if not html:
         return []
 
     soup = BeautifulSoup(html, "lxml")
