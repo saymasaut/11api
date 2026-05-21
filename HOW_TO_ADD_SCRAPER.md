@@ -2808,7 +2808,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
 
 ### Metadata and streams (`scrape`)
 
-- Metadata: `og:*`, `h1`, `.views`, tag/category links
+- Metadata: `h1` (primary title), then `og:title` / JSON-LD `VideoObject.name`; duration from `.video-item-duration`, `video:duration` meta (seconds), JSON-LD `PT…`, or KT `video_duration` in scripts — not whole-page text scan
+- List cards may glue metadata into one string (`23:1059 853 views 95%1080p HDTitle`); parser splits duration/views/title before cleaning
 - **Primary streams:** KT player `video_url` / `video_alt_url*` in page HTML (strip `function/0/` prefix when present) → `/get_file/4/{token}/{folder}/{id}/{file}.mp4/`
 - **Redirect resolution:** follow `/get_file/` with `Referer` + `age_pass=1` cookie to obtain CDN `Location` (optional; unresolved URLs remain playable with Referer)
 - **Qualities:** parse `360p`, `480p`, `720p`, `1080p`, `2160p` from filenames (`1751385_720p.mp4`, etc.)

@@ -85,6 +85,7 @@ def _clean_title(title: str | None) -> Optional[str]:
     if not title:
         return None
     t = str(title).strip()
+    t = re.sub(r"\s+", " ", t)
     for suffix in (
         " - PornTrex",
         " | PornTrex",
@@ -92,13 +93,106 @@ def _clean_title(title: str | None) -> Optional[str]:
         " | porntrex.com",
         " - PornTrex.com",
         " | PornTrex.com",
+        " — PornTrex",
     ):
         if t.lower().endswith(suffix.lower()):
             t = t[: -len(suffix)].strip()
+    # Strip trailing watch-page stats accidentally merged into og:title.
+    t = re.sub(
+        r"\s+\d{1,3}:\d{2}(?::\d{2})?\s+\d[\d\s,\.]*\s*views?\s*$",
+        "",
+        t,
+        flags=re.IGNORECASE,
+    ).strip()
+    t = re.sub(r"\s+\d{1,3}:\d{2}(?::\d{2})?\s*$", "", t).strip()
     return t or None
 
 
+def _seconds_to_duration(seconds: int) -> str:
+    total = max(0, int(seconds))
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
+def _normalize_duration(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return _seconds_to_duration(int(raw))
+
+    m = re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", raw, flags=re.IGNORECASE)
+    if m:
+        h = int(m.group(1) or 0)
+        mm = int(m.group(2) or 0)
+        s = int(m.group(3) or 0)
+        return _seconds_to_duration(h * 3600 + mm * 60 + s)
+
+    m = re.search(r"\b(\d{1,3}):(\d{2})(?::(\d{2}))?\b", raw)
+    if m:
+        a, b, c = int(m.group(1)), int(m.group(2)), int(m.group(3) or 0)
+        if c:
+            return f"{a}:{b:02d}:{c:02d}"
+        if a > 59:
+            return _seconds_to_duration(a * 60 + b)
+        return f"{a}:{b:02d}"
+
+    return None
+
+
+def _extract_duration(text: str | None) -> Optional[str]:
+    return _normalize_duration(text)
+
+
+_QUALITY_PREFIX_RE = re.compile(
+    r"^(?:(?:4k|2160p|1440p|1080p|720p|480p|360p|hd|vr)\s*)+",
+    re.IGNORECASE,
+)
+
+
+def _parse_list_card_text(raw: str | None) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    PornTrex cards often concatenate metadata into one string, e.g.
+    ``23:1059 853 views 95%1080p HDTitle`` (duration glued to views count).
+    """
+    blob = (raw or "").strip()
+    if not blob:
+        return None, None, None
+
+    duration: Optional[str] = None
+    views: Optional[str] = None
+    title = blob
+
+    m = re.match(r"^(\d{1,2}:\d{2}(?::\d{2})?)", title)
+    if m:
+        duration = m.group(1)
+        title = title[m.end() :].lstrip()
+
+    m = re.match(r"^(\d[\d\s,\.]{0,14}?)\s*views?\b", title, flags=re.IGNORECASE)
+    if m:
+        views = _normalize_numberish(m.group(1))
+        title = title[m.end() :].lstrip()
+    else:
+        m = re.match(r"^(\d{1,3}(?:\s+\d{3})+)", title)
+        if m:
+            views = _normalize_numberish(m.group(1))
+            title = title[m.end() :].lstrip()
+
+    title = re.sub(r"^\d{1,3}%\s*", "", title).strip()
+    title = _QUALITY_PREFIX_RE.sub("", title).strip()
+    title = _clean_title(title) or None
+    return title, duration, views
+
+
 def _clean_list_title(title: str | None) -> Optional[str]:
+    parsed_title, _, _ = _parse_list_card_text(title)
+    if parsed_title:
+        return parsed_title
     t = _clean_title(title)
     if not t:
         return None
@@ -111,6 +205,50 @@ def _clean_list_title(title: str | None) -> Optional[str]:
     return t or None
 
 
+def _list_title_raw(title_el: Any, link: Any) -> Optional[str]:
+    if title_el is not None:
+        anchor = title_el if getattr(title_el, "name", None) == "a" else title_el.select_one("a")
+        if anchor is not None:
+            return _first_non_empty(anchor.get("title"), anchor.get_text(" ", strip=True))
+        chunks: list[str] = []
+        for child in title_el.children:
+            name = getattr(child, "name", None)
+            if name and name != "a":
+                classes = " ".join(child.get("class") or []).lower()
+                if "info" in classes or "video-item-duration" in classes or "video-item-views" in classes:
+                    continue
+            text = (
+                child.get_text(" ", strip=True)
+                if hasattr(child, "get_text")
+                else str(child).strip()
+            )
+            if text:
+                chunks.append(text)
+        if chunks:
+            return " ".join(chunks)
+        return title_el.get_text(" ", strip=True) or None
+    if link is not None:
+        return _first_non_empty(link.get("title"), link.get("aria-label"))
+    return None
+
+
+def _list_duration_from_block(block: Any, *, fallback_text: str | None = None) -> Optional[str]:
+    if hasattr(block, "select_one"):
+        for sel in (
+            ".video-item-duration",
+            ".info.video-item-duration",
+            ".duration",
+            ".thumb-duration",
+        ):
+            el = block.select_one(sel)
+            if el:
+                dur = _normalize_duration(el.get_text(" ", strip=True) or el.get("content"))
+                if dur:
+                    return dur
+    _, dur, _ = _parse_list_card_text(fallback_text)
+    return dur
+
+
 def _normalize_numberish(value: str | None) -> Optional[str]:
     if not value:
         return None
@@ -118,13 +256,6 @@ def _normalize_numberish(value: str | None) -> Optional[str]:
     txt = re.sub(r"\s+", "", txt)
     txt = re.sub(r"[^0-9KMBkmb\.]", "", txt)
     return txt.upper() or None
-
-
-def _extract_duration(text: str | None) -> Optional[str]:
-    if not text:
-        return None
-    m = re.search(r"\b(?:\d{1,2}:){1,2}\d{2}\b", text)
-    return m.group(0) if m else None
 
 
 def _extract_views(text: str | None) -> Optional[str]:
@@ -265,17 +396,21 @@ def _parse_list_items(soup: BeautifulSoup, *, limit: int) -> list[dict[str, Any]
         seen.add(href)
 
         title_el = (
-            block.select_one(".video-item-title")
+            block.select_one(".video-item-title, a.video-item-title")
             if hasattr(block, "select_one")
             else None
         )
-        title = _clean_list_title(
-            _first_non_empty(
-                title_el.get_text(" ", strip=True) if title_el else None,
-                link.get("title") if link else None,
-                link.get_text(" ", strip=True) if link else None,
-            )
-        ) or "Unknown Video"
+        raw_title = _list_title_raw(
+            title_el,
+            link,
+        ) or (link.get_text(" ", strip=True) if link else None)
+        parsed_title, parsed_dur, parsed_views = _parse_list_card_text(raw_title)
+        title = (
+            parsed_title
+            or _clean_list_title(raw_title)
+            or _clean_list_title(link.get("title") if link else None)
+            or "Unknown Video"
+        )
 
         screenshot_el = (
             block.select_one(".screenshot-item, img.screenshot-item")
@@ -288,21 +423,17 @@ def _parse_list_items(soup: BeautifulSoup, *, limit: int) -> list[dict[str, Any]
                 link.find("img")
             )
 
-        dur_el = (
-            block.select_one(".video-item-duration, .info.video-item-duration")
-            if hasattr(block, "select_one")
-            else None
-        )
-        duration = _extract_duration(
-            dur_el.get_text(" ", strip=True) if dur_el else None
-        )
+        duration = _list_duration_from_block(block, fallback_text=raw_title) or parsed_dur
 
         views_el = (
             block.select_one(".video-item-views, .info.video-item-views")
             if hasattr(block, "select_one")
             else None
         )
-        views = _extract_views(views_el.get_text(" ", strip=True) if views_el else None)
+        views = (
+            _extract_views(views_el.get_text(" ", strip=True) if views_el else None)
+            or parsed_views
+        )
 
         items.append(
             {
@@ -714,32 +845,123 @@ async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, re
     video["has_video"] = bool(streams)
 
 
+def _parse_json_ld_video(soup: BeautifulSoup) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        raw = script.string or script.get_text(strip=False)
+        if not raw:
+            continue
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            continue
+        objs = parsed if isinstance(parsed, list) else [parsed]
+        for obj in objs:
+            if not isinstance(obj, dict):
+                continue
+            t = obj.get("@type")
+            if t != "VideoObject" and not (isinstance(t, list) and "VideoObject" in t):
+                continue
+            out["title"] = _first_non_empty(out.get("title"), obj.get("name"))
+            out["description"] = _first_non_empty(out.get("description"), obj.get("description"))
+            thumb = obj.get("thumbnailUrl")
+            if isinstance(thumb, list) and thumb:
+                thumb = thumb[0]
+            out["thumbnail"] = _first_non_empty(out.get("thumbnail"), thumb)
+            out["duration"] = _first_non_empty(
+                out.get("duration"), _normalize_duration(obj.get("duration"))
+            )
+            iv = obj.get("interactionCount") or obj.get("viewCount")
+            if iv is not None:
+                out["views"] = str(iv)
+    return out
+
+
+def _extract_watch_duration(soup: BeautifulSoup, html: str) -> Optional[str]:
+    for sel in (
+        ".video-item-duration",
+        ".info.video-item-duration",
+        ".duration",
+        ".block-duration",
+        ".video-duration",
+        "#duration",
+        "[itemprop='duration']",
+    ):
+        el = soup.select_one(sel)
+        if el:
+            dur = _normalize_duration(el.get("content") or el.get_text(" ", strip=True))
+            if dur:
+                return dur
+
+    dur_meta = _meta(soup, prop="video:duration") or _meta(soup, name="duration")
+    if dur_meta:
+        dur = _normalize_duration(dur_meta)
+        if dur:
+            return dur
+
+    for pattern in (
+        r"video_duration\s*[=:]\s*['\"](\d+)['\"]",
+        r"duration\s*[=:]\s*['\"](\d{1,3}:\d{2}(?::\d{2})?)['\"]",
+        r"video_duration\s*[=:]\s*(\d{1,3}:\d{2}(?::\d{2})?)",
+    ):
+        m = re.search(pattern, html, flags=re.IGNORECASE)
+        if m:
+            dur = _normalize_duration(m.group(1))
+            if dur:
+                return dur
+
+    for scope_sel in (".video-info", ".video-details", ".info-holder", "h1"):
+        scope = soup.select_one(scope_sel)
+        if scope:
+            dur = _normalize_duration(scope.get_text(" ", strip=True))
+            if dur:
+                return dur
+
+    return None
+
+
 def parse_video_page(html: str, url: str) -> dict[str, Any]:
     soup = BeautifulSoup(html, "lxml")
     canon = _normalize_video_href(url) or url
+    ld = _parse_json_ld_video(soup)
 
+    h1 = soup.select_one("h1, .video-title, .title-holder h1")
     title = _clean_title(
         _first_non_empty(
+            h1.get_text(" ", strip=True) if h1 else None,
+            ld.get("title"),
             _meta(soup, prop="og:title"),
             _meta(soup, name="twitter:title"),
-            soup.select_one("h1").get_text(" ", strip=True) if soup.select_one("h1") else None,
             soup.title.get_text(strip=True) if soup.title else None,
         )
     ) or "Unknown Video"
 
     description = _first_non_empty(
+        ld.get("description"),
         _meta(soup, prop="og:description"),
         _meta(soup, name="description"),
     )
-    thumbnail = _first_non_empty(_meta(soup, prop="og:image"), _meta(soup, name="twitter:image"))
+    thumbnail = _first_non_empty(
+        ld.get("thumbnail"),
+        _meta(soup, prop="og:image"),
+        _meta(soup, name="twitter:image"),
+    )
     if thumbnail and thumbnail.startswith("//"):
         thumbnail = f"https:{thumbnail}"
 
-    text_blob = soup.get_text(" ", strip=True)
-    views_el = soup.select_one(".views, .video-info .views")
+    views_el = soup.select_one(
+        ".video-item-views, .info.video-item-views, .views, .video-info .views"
+    )
     views_text = views_el.get_text(" ", strip=True) if views_el else None
-    duration = _extract_duration(text_blob)
-    views = _extract_views(views_text) or _extract_views(text_blob)
+    duration = _first_non_empty(
+        _extract_watch_duration(soup, html),
+        ld.get("duration"),
+    )
+    views = (
+        _extract_views(views_text)
+        or ld.get("views")
+        or _extract_views(soup.select_one("h1").get_text(" ", strip=True) if soup.select_one("h1") else None)
+    )
 
     tags: list[str] = []
     for el in soup.select(".tags a, a[href*='/tags/'], a[href*='/category/']"):
@@ -862,27 +1084,24 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
         thumb = _thumbnail_from_screenshot_item(screenshot_el) or _best_image_url(
             a.find("img") or container.find("img")
         )
-        title_el = container.select_one(".video-item-title")
-        dur_el = container.select_one(".video-item-duration, .info.video-item-duration")
+        title_el = container.select_one(".video-item-title, a.video-item-title")
+        raw_title = _list_title_raw(title_el, a) or a.get_text(" ", strip=True)
+        parsed_title, parsed_dur, parsed_views = _parse_list_card_text(raw_title)
         views_el = container.select_one(".video-item-views, .info.video-item-views")
         items.append(
             {
                 "url": href,
-                "title": _clean_list_title(
-                    _first_non_empty(
-                        title_el.get_text(" ", strip=True) if title_el else None,
-                        a.get("title"),
-                        a.get_text(" ", strip=True),
-                    )
-                )
+                "title": parsed_title
+                or _clean_list_title(raw_title)
+                or _clean_list_title(a.get("title"))
                 or "Unknown Video",
                 "thumbnail_url": thumb,
-                "duration": _extract_duration(
-                    dur_el.get_text(" ", strip=True) if dur_el else None
-                ),
+                "duration": _list_duration_from_block(container, fallback_text=raw_title)
+                or parsed_dur,
                 "views": _extract_views(
                     views_el.get_text(" ", strip=True) if views_el else None
-                ),
+                )
+                or parsed_views,
                 "uploader_name": None,
             }
         )
