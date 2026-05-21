@@ -27,17 +27,11 @@ _DEFAULT_HEADERS = {
     "Cookie": "age_pass=1",
 }
 
-_VIDEO_PATH_RE = re.compile(r"^/video/(\d+)(?:/([^/]+))?/?$", re.IGNORECASE)
+_VIDEO_PATH_RE = re.compile(r"^/video/(\d+)/[^/]+/?$", re.IGNORECASE)
 _VIDEO_HREF_RE = re.compile(
-    r'href=["\'](?:https?://(?:www\.)?porntrex\.com)?/video/(\d+)(?:/([^"\']*?))?/?["\']',
+    r'href=["\'](?:https?://(?:www\.)?porntrex\.com)?/video/(\d+)/([^"\']+)/?["\']',
     re.IGNORECASE,
 )
-_VIDEO_PATH_INLINE_RE = re.compile(
-    r"(?:https?://(?:www\.)?porntrex\.com)?/video/(\d+)(?:/([\w\-]+))?/?",
-    re.IGNORECASE,
-)
-_EMBED_PATH_RE = re.compile(r"^/embed/(\d+)/?$", re.IGNORECASE)
-_VIDEO_ID_RE = re.compile(r"/(?:video|embed)/(\d+)", re.IGNORECASE)
 _KT_URL_KEYS = r"(?:video_url|video_url_text|video_alt_url|video_alt_url2)"
 _KT_PATTERNS = [
     rf"{_KT_URL_KEYS}\s*[:=]\s*'([^']+)'",
@@ -62,30 +56,9 @@ def get_categories() -> list[dict]:
         return []
 
 
-async def _fetch_with_curl_cffi(url: str) -> Optional[str]:
-    try:
-        from curl_cffi.requests import AsyncSession
-    except ImportError:
-        return None
-
-    headers = dict(_DEFAULT_HEADERS)
-    for imp in ("chrome120", "chrome110", "safari15_3"):
-        try:
-            async with AsyncSession(impersonate=imp, headers=headers, timeout=45.0) as client:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    return resp.text
-        except Exception:
-            continue
-    return None
-
-
 async def fetch_page(url: str, *, referer: str | None = None) -> str:
     headers = dict(_DEFAULT_HEADERS)
     headers["Referer"] = referer or BASE_SITE
-    text = await _fetch_with_curl_cffi(url)
-    if text:
-        return text
     return await pool_fetch_html(url, headers=headers)
 
 
@@ -112,7 +85,6 @@ def _clean_title(title: str | None) -> Optional[str]:
     if not title:
         return None
     t = str(title).strip()
-    t = re.sub(r"\s+", " ", t)
     for suffix in (
         " - PornTrex",
         " | PornTrex",
@@ -120,106 +92,13 @@ def _clean_title(title: str | None) -> Optional[str]:
         " | porntrex.com",
         " - PornTrex.com",
         " | PornTrex.com",
-        " — PornTrex",
     ):
         if t.lower().endswith(suffix.lower()):
             t = t[: -len(suffix)].strip()
-    # Strip trailing watch-page stats accidentally merged into og:title.
-    t = re.sub(
-        r"\s+\d{1,3}:\d{2}(?::\d{2})?\s+\d[\d\s,\.]*\s*views?\s*$",
-        "",
-        t,
-        flags=re.IGNORECASE,
-    ).strip()
-    t = re.sub(r"\s+\d{1,3}:\d{2}(?::\d{2})?\s*$", "", t).strip()
     return t or None
 
 
-def _seconds_to_duration(seconds: int) -> str:
-    total = max(0, int(seconds))
-    h, rem = divmod(total, 3600)
-    m, s = divmod(rem, 60)
-    if h:
-        return f"{h}:{m:02d}:{s:02d}"
-    return f"{m}:{s:02d}"
-
-
-def _normalize_duration(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    raw = str(value).strip()
-    if not raw:
-        return None
-    if raw.isdigit():
-        return _seconds_to_duration(int(raw))
-
-    m = re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", raw, flags=re.IGNORECASE)
-    if m:
-        h = int(m.group(1) or 0)
-        mm = int(m.group(2) or 0)
-        s = int(m.group(3) or 0)
-        return _seconds_to_duration(h * 3600 + mm * 60 + s)
-
-    m = re.search(r"\b(\d{1,3}):(\d{2})(?::(\d{2}))?\b", raw)
-    if m:
-        a, b, c = int(m.group(1)), int(m.group(2)), int(m.group(3) or 0)
-        if c:
-            return f"{a}:{b:02d}:{c:02d}"
-        if a > 59:
-            return _seconds_to_duration(a * 60 + b)
-        return f"{a}:{b:02d}"
-
-    return None
-
-
-def _extract_duration(text: str | None) -> Optional[str]:
-    return _normalize_duration(text)
-
-
-_QUALITY_PREFIX_RE = re.compile(
-    r"^(?:(?:4k|2160p|1440p|1080p|720p|480p|360p|hd|vr)\s*)+",
-    re.IGNORECASE,
-)
-
-
-def _parse_list_card_text(raw: str | None) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    """
-    PornTrex cards often concatenate metadata into one string, e.g.
-    ``23:1059 853 views 95%1080p HDTitle`` (duration glued to views count).
-    """
-    blob = (raw or "").strip()
-    if not blob:
-        return None, None, None
-
-    duration: Optional[str] = None
-    views: Optional[str] = None
-    title = blob
-
-    m = re.match(r"^(\d{1,2}:\d{2}(?::\d{2})?)", title)
-    if m:
-        duration = m.group(1)
-        title = title[m.end() :].lstrip()
-
-    m = re.match(r"^(\d[\d\s,\.]{0,14}?)\s*views?\b", title, flags=re.IGNORECASE)
-    if m:
-        views = _normalize_numberish(m.group(1))
-        title = title[m.end() :].lstrip()
-    else:
-        m = re.match(r"^(\d{1,3}(?:\s+\d{3})+)", title)
-        if m:
-            views = _normalize_numberish(m.group(1))
-            title = title[m.end() :].lstrip()
-
-    title = re.sub(r"^\d{1,3}%\s*", "", title).strip()
-    title = _QUALITY_PREFIX_RE.sub("", title).strip()
-    title = _clean_title(title) or None
-    return title, duration, views
-
-
 def _clean_list_title(title: str | None) -> Optional[str]:
-    parsed_title, _, _ = _parse_list_card_text(title)
-    if parsed_title:
-        return parsed_title
     t = _clean_title(title)
     if not t:
         return None
@@ -232,50 +111,6 @@ def _clean_list_title(title: str | None) -> Optional[str]:
     return t or None
 
 
-def _list_title_raw(title_el: Any, link: Any) -> Optional[str]:
-    if title_el is not None:
-        anchor = title_el if getattr(title_el, "name", None) == "a" else title_el.select_one("a")
-        if anchor is not None:
-            return _first_non_empty(anchor.get("title"), anchor.get_text(" ", strip=True))
-        chunks: list[str] = []
-        for child in title_el.children:
-            name = getattr(child, "name", None)
-            if name and name != "a":
-                classes = " ".join(child.get("class") or []).lower()
-                if "info" in classes or "video-item-duration" in classes or "video-item-views" in classes:
-                    continue
-            text = (
-                child.get_text(" ", strip=True)
-                if hasattr(child, "get_text")
-                else str(child).strip()
-            )
-            if text:
-                chunks.append(text)
-        if chunks:
-            return " ".join(chunks)
-        return title_el.get_text(" ", strip=True) or None
-    if link is not None:
-        return _first_non_empty(link.get("title"), link.get("aria-label"))
-    return None
-
-
-def _list_duration_from_block(block: Any, *, fallback_text: str | None = None) -> Optional[str]:
-    if hasattr(block, "select_one"):
-        for sel in (
-            ".video-item-duration",
-            ".info.video-item-duration",
-            ".duration",
-            ".thumb-duration",
-        ):
-            el = block.select_one(sel)
-            if el:
-                dur = _normalize_duration(el.get_text(" ", strip=True) or el.get("content"))
-                if dur:
-                    return dur
-    _, dur, _ = _parse_list_card_text(fallback_text)
-    return dur
-
-
 def _normalize_numberish(value: str | None) -> Optional[str]:
     if not value:
         return None
@@ -285,53 +120,26 @@ def _normalize_numberish(value: str | None) -> Optional[str]:
     return txt.upper() or None
 
 
+def _extract_duration(text: str | None) -> Optional[str]:
+    if not text:
+        return None
+    m = re.search(r"\b(?:\d{1,2}:){1,2}\d{2}\b", text)
+    return m.group(0) if m else None
+
+
 def _extract_views(text: str | None) -> Optional[str]:
     if not text:
         return None
-    raw = str(text).strip()
-    m = re.search(
-        r"(\d[\d\s,\.]*)\s*views?\b",
-        raw,
-        flags=re.IGNORECASE,
-    )
-    if m:
-        return _normalize_numberish(m.group(1))
     m = re.search(
         r"\bviews?\s*[:\-]?\s*(\d[\d\s,\.]*\s*[KMBkmb]?)\b",
-        raw,
+        text,
         flags=re.IGNORECASE,
     )
-    if m:
-        return _normalize_numberish(m.group(1))
-    m = re.search(r"\b(\d[\d\s,\.]*\s*[KMBkmb])\b", raw, flags=re.IGNORECASE)
-    if m:
-        return _normalize_numberish(m.group(1))
-    m = re.search(r"(\d[\d\s,\.]+)", raw)
-    if m:
-        return _normalize_numberish(m.group(1))
-    return None
-
-
-def _normalize_asset_url(url: str) -> Optional[str]:
-    url = (url or "").strip()
-    if not url or url.startswith("data:"):
-        return None
-    if url.startswith("//"):
-        return f"https:{url}"
-    if url.startswith("/"):
-        return urljoin(BASE_SITE, url)
-    if url.startswith("http"):
-        return url
-    return None
-
-
-def _url_from_style(style: str | None) -> Optional[str]:
-    if not style:
-        return None
-    m = re.search(r"url\(['\"]?(.*?)['\"]?\)", style, flags=re.IGNORECASE)
+    if not m:
+        m = re.search(r"\b(\d[\d\s,\.]*\s*[KMBkmb])\b", text, flags=re.IGNORECASE)
     if not m:
         return None
-    return _normalize_asset_url(m.group(1))
+    return _normalize_numberish(m.group(1))
 
 
 def _best_image_url(img: Any) -> Optional[str]:
@@ -346,168 +154,17 @@ def _best_image_url(img: Any) -> Optional[str]:
             continue
         if key == "srcset" and " " in url:
             url = url.split(" ", 1)[0].strip()
-        normalized = _normalize_asset_url(url)
-        if normalized:
-            return normalized
+        if url.startswith("//"):
+            return f"https:{url}"
+        if url.startswith("/"):
+            return urljoin(BASE_SITE, url)
+        return url
     return None
-
-
-def _thumbnail_from_screenshot_item(el: Any) -> Optional[str]:
-    """PornTrex cards use .screenshot-item (img or background on ptx.cdntrex.com)."""
-    if el is None:
-        return None
-
-    for attr in ("data-src", "data-original", "data-thumb", "src"):
-        normalized = _normalize_asset_url(str(el.get(attr) or ""))
-        if normalized and "videos_screenshots" in normalized.lower():
-            return normalized
-
-    from_style = _url_from_style(el.get("style"))
-    if from_style and "videos_screenshots" in from_style.lower():
-        return from_style
-
-    if getattr(el, "name", None) == "img":
-        return _best_image_url(el)
-
-    img = el.select_one("img.screenshot-item, img") if hasattr(el, "select_one") else None
-    if img:
-        thumb = _best_image_url(img)
-        if thumb:
-            return thumb
-
-    return None
-
-
-def _card_container_for_anchor(anchor: Any) -> Any:
-    for parent in anchor.parents:
-        if getattr(parent, "name", None) in ("body", "html", "[document]"):
-            break
-        classes = " ".join(parent.get("class") or []).lower()
-        if any(
-            token in classes
-            for token in (
-                "video-item",
-                "thumb-block",
-                "thumb",
-                "item-thumb",
-                "video-thumb",
-                "thumb-list",
-                "videos-list",
-                "list-videos",
-            )
-        ):
-            return parent
-    return anchor.parent
-
-
-def _list_item_from_context(
-    *,
-    href: str,
-    link: Any | None,
-    block: Any | None,
-) -> dict[str, Any]:
-    title_el = None
-    screenshot_el = None
-    views_el = None
-    if block is not None and hasattr(block, "select_one"):
-        title_el = block.select_one(".video-item-title, a.video-item-title")
-        screenshot_el = block.select_one(".screenshot-item, img.screenshot-item")
-        views_el = block.select_one(".video-item-views, .info.video-item-views")
-
-    raw_title = _list_title_raw(title_el, link) or (
-        link.get_text(" ", strip=True) if link is not None else None
-    )
-    parsed_title, parsed_dur, parsed_views = _parse_list_card_text(raw_title)
-    title = (
-        parsed_title
-        or _clean_list_title(raw_title)
-        or _clean_list_title(link.get("title") if link is not None else None)
-        or "Unknown Video"
-    )
-
-    thumb = _thumbnail_from_screenshot_item(screenshot_el)
-    if not thumb and link is not None:
-        thumb = _thumbnail_from_screenshot_item(link.find("img")) or _best_image_url(
-            link.find("img")
-        )
-    if not thumb and block is not None:
-        thumb = _thumbnail_from_screenshot_item(
-            block.select_one(".screenshot-item, img.screenshot-item, img")
-        )
-
-    duration = (
-        _list_duration_from_block(block, fallback_text=raw_title) if block is not None else None
-    ) or parsed_dur
-    views = (
-        _extract_views(views_el.get_text(" ", strip=True) if views_el else None)
-        if views_el is not None
-        else None
-    ) or parsed_views
-
-    return {
-        "url": href,
-        "title": title,
-        "thumbnail_url": thumb,
-        "duration": duration,
-        "views": views,
-        "uploader_name": None,
-    }
-
-
-def _parse_list_items(soup: BeautifulSoup, *, limit: int, html: str = "") -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    seen: set[str] = set()
-
-    def _add(href: str, link: Any | None = None, block: Any | None = None) -> None:
-        if len(items) >= limit:
-            return
-        canon = _normalize_video_href(href)
-        if not canon or canon in seen:
-            return
-        seen.add(canon)
-        ctx_block = block
-        if link is not None and ctx_block is None:
-            ctx_block = _card_container_for_anchor(link)
-        items.append(
-            _list_item_from_context(href=canon, link=link, block=ctx_block)
-        )
-
-    for link in soup.select("a[href*='/video/']"):
-        _add(link.get("href") or "", link=link)
-
-    if len(items) < limit:
-        for block in soup.select(
-            "div.video-item, div.thumb-block, div.thumb, li.video-item, "
-            ".videos-list .item, .list-videos .item, .thumbs .thumb"
-        ):
-            if len(items) >= limit:
-                break
-            inner = block.select_one("a[href*='/video/']") if hasattr(block, "select_one") else None
-            if not inner:
-                continue
-            _add(inner.get("href") or "", link=inner, block=block)
-
-    if len(items) < limit and html:
-        for vid, slug in _VIDEO_PATH_INLINE_RE.findall(html):
-            slug = (slug or "").strip() or None
-            _add(_canonical_video_url(vid, slug))
-
-    return items[:limit]
 
 
 def _extract_video_id(url: str) -> Optional[str]:
-    m = _VIDEO_ID_RE.search(url or "")
+    m = re.search(r"/video/(\d+)/", url or "", flags=re.IGNORECASE)
     return m.group(1) if m else None
-
-
-def _embed_player_url(video_id: str) -> str:
-    return f"https://www.porntrex.com/embed/{video_id}"
-
-
-def _is_embed_page_url(url: str) -> bool:
-    path = (urlparse(url or "").path or "").lower().strip("/")
-    parts = [p for p in path.split("/") if p]
-    return len(parts) >= 2 and parts[0] == "embed" and parts[1].isdigit()
 
 
 def _canonical_video_url(video_id: str, slug: str | None = None) -> str:
@@ -519,64 +176,27 @@ def _canonical_video_url(video_id: str, slug: str | None = None) -> str:
 
 def _normalize_video_href(href: str) -> Optional[str]:
     href = (href or "").strip()
-    if not href or href.startswith("#") or href.lower().startswith("javascript:"):
+    if not href:
         return None
     if href.startswith("//"):
         href = f"https:{href}"
     elif href.startswith("/"):
         href = f"https://www.porntrex.com{href}"
 
-    parsed = urlparse(href.split("#", 1)[0])
+    parsed = urlparse(href)
     host = (parsed.netloc or "").lower()
-    if host and SITE_HOST not in host:
+    if SITE_HOST not in host:
+        return None
+    if not _VIDEO_PATH_RE.match(parsed.path or ""):
+        return None
+    if parsed.query:
         return None
 
-    m = _VIDEO_PATH_RE.match(parsed.path or "")
-    if not m:
-        inline = _VIDEO_PATH_INLINE_RE.search(href)
-        if not inline:
-            return None
-        vid, slug = inline.group(1), (inline.group(2) or "").strip() or None
-        return _canonical_video_url(vid, slug)
-
-    vid = m.group(1)
-    slug = (m.group(2) or "").strip() or None
+    parts = [p for p in (parsed.path or "").strip("/").split("/") if p]
+    if len(parts) < 3 or parts[0].lower() != "video":
+        return None
+    vid, slug = parts[1], parts[2]
     return _canonical_video_url(vid, slug)
-
-
-def _find_canonical_video_page_url(
-    soup: BeautifulSoup, html: str, video_id: str
-) -> Optional[str]:
-    for sel in (
-        ("link", {"rel": "canonical"}),
-        ("meta", {"property": "og:url"}),
-    ):
-        tag = soup.find(sel[0], attrs=sel[1])
-        if tag:
-            href = tag.get("href") or tag.get("content")
-            if href:
-                canon = _normalize_video_href(str(href))
-                if canon:
-                    return canon
-
-    m = re.search(
-        rf"https?://(?:www\.)?porntrex\.com/video/{re.escape(video_id)}(?:/[\w\-]+)?/?",
-        html,
-        re.IGNORECASE,
-    )
-    if m:
-        return _normalize_video_href(m.group(0))
-    return _canonical_video_url(video_id)
-
-
-def _ensure_embed_stream(video_data: dict[str, Any], video_id: str) -> None:
-    embed_url = _embed_player_url(video_id)
-    streams = video_data.setdefault("streams", [])
-    if not any((s.get("format") == "embed" and embed_url in (s.get("url") or "")) for s in streams):
-        streams.append({"url": embed_url, "quality": "embed", "format": "embed"})
-    if not video_data.get("has_video"):
-        video_data["has_video"] = True
-        video_data["default"] = embed_url
 
 
 def _resolve_kt_url(raw: str, page_url: str) -> str:
@@ -707,15 +327,15 @@ def _stream_quality_from_url(url: str, *, label: str | None = None) -> str:
 
 def _extract_native_embed_url(html: str, video_url: str) -> Optional[str]:
     m = re.search(
-        r"https?://(?:www\.)?porntrex\.com/embed/(\d+)/?",
+        r"https?://(?:www\.)?porntrex\.com/embed/\d+\b",
         html,
         flags=re.IGNORECASE,
     )
     if m:
-        return _embed_player_url(m.group(1))
+        return m.group(0).strip().rstrip("/") + "/"
     vid = _extract_video_id(video_url)
     if vid:
-        return _embed_player_url(vid)
+        return f"https://www.porntrex.com/embed/{vid}/"
     return None
 
 
@@ -938,137 +558,32 @@ async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, re
     video["has_video"] = bool(streams)
 
 
-def _parse_json_ld_video(soup: BeautifulSoup) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
-        raw = script.string or script.get_text(strip=False)
-        if not raw:
-            continue
-        try:
-            parsed = json.loads(raw)
-        except Exception:
-            continue
-        objs = parsed if isinstance(parsed, list) else [parsed]
-        for obj in objs:
-            if not isinstance(obj, dict):
-                continue
-            t = obj.get("@type")
-            if t != "VideoObject" and not (isinstance(t, list) and "VideoObject" in t):
-                continue
-            out["title"] = _first_non_empty(out.get("title"), obj.get("name"))
-            out["description"] = _first_non_empty(out.get("description"), obj.get("description"))
-            thumb = obj.get("thumbnailUrl")
-            if isinstance(thumb, list) and thumb:
-                thumb = thumb[0]
-            out["thumbnail"] = _first_non_empty(out.get("thumbnail"), thumb)
-            out["duration"] = _first_non_empty(
-                out.get("duration"), _normalize_duration(obj.get("duration"))
-            )
-            iv = obj.get("interactionCount") or obj.get("viewCount")
-            if iv is not None:
-                out["views"] = str(iv)
-    return out
-
-
-def _extract_watch_duration(soup: BeautifulSoup, html: str) -> Optional[str]:
-    for sel in (
-        ".video-item-duration",
-        ".info.video-item-duration",
-        ".duration",
-        ".block-duration",
-        ".video-duration",
-        "#duration",
-        "[itemprop='duration']",
-    ):
-        el = soup.select_one(sel)
-        if el:
-            dur = _normalize_duration(el.get("content") or el.get_text(" ", strip=True))
-            if dur:
-                return dur
-
-    dur_meta = _meta(soup, prop="video:duration") or _meta(soup, name="duration")
-    if dur_meta:
-        dur = _normalize_duration(dur_meta)
-        if dur:
-            return dur
-
-    for pattern in (
-        r"video_duration\s*[=:]\s*['\"](\d+)['\"]",
-        r"duration\s*[=:]\s*['\"](\d{1,3}:\d{2}(?::\d{2})?)['\"]",
-        r"video_duration\s*[=:]\s*(\d{1,3}:\d{2}(?::\d{2})?)",
-    ):
-        m = re.search(pattern, html, flags=re.IGNORECASE)
-        if m:
-            dur = _normalize_duration(m.group(1))
-            if dur:
-                return dur
-
-    for scope_sel in (".video-info", ".video-details", ".info-holder", "h1"):
-        scope = soup.select_one(scope_sel)
-        if scope:
-            dur = _normalize_duration(scope.get_text(" ", strip=True))
-            if dur:
-                return dur
-
-    return None
-
-
-def parse_video_page(
-    html: str,
-    url: str,
-    *,
-    response_url: str | None = None,
-    video: dict[str, Any] | None = None,
-    page_url: str | None = None,
-) -> dict[str, Any]:
+def parse_video_page(html: str, url: str) -> dict[str, Any]:
     soup = BeautifulSoup(html, "lxml")
-    if response_url:
-        canon = response_url
-    elif _is_embed_page_url(url):
-        vid = _extract_video_id(url)
-        canon = _embed_player_url(vid) if vid else url
-    else:
-        canon = _normalize_video_href(url) or url
-    stream_base = page_url or canon
-    ld = _parse_json_ld_video(soup)
+    canon = _normalize_video_href(url) or url
 
-    h1 = soup.select_one("h1, .video-title, .title-holder h1")
     title = _clean_title(
         _first_non_empty(
-            h1.get_text(" ", strip=True) if h1 else None,
-            ld.get("title"),
             _meta(soup, prop="og:title"),
             _meta(soup, name="twitter:title"),
+            soup.select_one("h1").get_text(" ", strip=True) if soup.select_one("h1") else None,
             soup.title.get_text(strip=True) if soup.title else None,
         )
     ) or "Unknown Video"
 
     description = _first_non_empty(
-        ld.get("description"),
         _meta(soup, prop="og:description"),
         _meta(soup, name="description"),
     )
-    thumbnail = _first_non_empty(
-        ld.get("thumbnail"),
-        _meta(soup, prop="og:image"),
-        _meta(soup, name="twitter:image"),
-    )
+    thumbnail = _first_non_empty(_meta(soup, prop="og:image"), _meta(soup, name="twitter:image"))
     if thumbnail and thumbnail.startswith("//"):
         thumbnail = f"https:{thumbnail}"
 
-    views_el = soup.select_one(
-        ".video-item-views, .info.video-item-views, .views, .video-info .views"
-    )
+    text_blob = soup.get_text(" ", strip=True)
+    views_el = soup.select_one(".views, .video-info .views")
     views_text = views_el.get_text(" ", strip=True) if views_el else None
-    duration = _first_non_empty(
-        _extract_watch_duration(soup, html),
-        ld.get("duration"),
-    )
-    views = (
-        _extract_views(views_text)
-        or ld.get("views")
-        or _extract_views(soup.select_one("h1").get_text(" ", strip=True) if soup.select_one("h1") else None)
-    )
+    duration = _extract_duration(text_blob)
+    views = _extract_views(views_text) or _extract_views(text_blob)
 
     tags: list[str] = []
     for el in soup.select(".tags a, a[href*='/tags/'], a[href*='/category/']"):
@@ -1096,90 +611,20 @@ def parse_video_page(
             _meta(soup, prop="article:published_time"),
             _meta(soup, prop="article:modified_time"),
         ),
-        "video": video
-        or {
-            k: v
-            for k, v in _extract_streams(soup, html, stream_base).items()
-            if k in ("streams", "hls", "default", "has_video")
-        },
+        "video": _extract_streams(soup, html, canon),
         "related_videos": [],
         "preview_url": None,
     }
 
 
 async def scrape(url: str) -> dict[str, Any]:
-    video_id = _extract_video_id(url)
-    if not video_id:
+    canon = _normalize_video_href(url)
+    if not canon:
         raise ValueError(f"Unsupported PornTrex URL: {url}")
 
-    is_embed = _is_embed_page_url(url)
-    response_url = (
-        _embed_player_url(video_id)
-        if is_embed
-        else (_normalize_video_href(url) or _canonical_video_url(video_id))
-    )
-    fetch_url = _embed_player_url(video_id) if is_embed else response_url
-
-    html = ""
-    try:
-        html = await fetch_page(fetch_url, referer=response_url)
-    except Exception:
-        pass
-
-    empty_video: dict[str, Any] = {
-        "streams": [],
-        "hls": None,
-        "default": None,
-        "has_video": False,
-    }
-    video_data = (
-        _extract_streams(BeautifulSoup(html, "lxml"), html, fetch_url)
-        if html
-        else dict(empty_video)
-    )
-
-    meta_html = html
-    if is_embed or not video_data.get("has_video"):
-        canon_url = _canonical_video_url(video_id)
-        if html:
-            found = _find_canonical_video_page_url(
-                BeautifulSoup(html, "lxml"), html, video_id
-            )
-            if found:
-                canon_url = found
-        if canon_url != fetch_url:
-            try:
-                full_html = await fetch_page(canon_url, referer=response_url)
-                if not video_data.get("has_video"):
-                    video_data = _extract_streams(
-                        BeautifulSoup(full_html, "lxml"), full_html, canon_url
-                    )
-                if is_embed or not _meta(BeautifulSoup(html, "lxml"), prop="og:title"):
-                    meta_html = full_html
-            except Exception:
-                pass
-
-    _ensure_embed_stream(video_data, video_id)
-
-    if is_embed:
-        direct = [
-            s
-            for s in video_data.get("streams", [])
-            if s.get("format") in ("mp4", "hls")
-        ]
-        if not direct:
-            video_data["default"] = _embed_player_url(video_id)
-
-    data = parse_video_page(
-        meta_html or "",
-        url,
-        response_url=response_url,
-        video=video_data,
-        page_url=fetch_url,
-    )
-    await _resolve_video_streams_to_remote_playable(
-        data.get("video", {}), referer=response_url
-    )
+    html = await fetch_page(canon, referer=canon)
+    data = parse_video_page(html, canon)
+    await _resolve_video_streams_to_remote_playable(data.get("video", {}), referer=canon)
     return data
 
 
@@ -1235,54 +680,82 @@ def _build_list_page_url(base_url: str, page: int) -> str:
     )
 
 
-def _is_blocked_list_html(html: str) -> bool:
-    low = (html or "").lower()
-    if len(html) < 2500:
-        return True
-    if "age-restricted" in low and "/video/" not in low:
-        return True
-    if "confirm you are" in low and "video-item" not in low and "/video/" not in low:
-        return True
-    return False
-
-
 async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[dict[str, Any]]:
-    referer = base_url if (base_url or "").startswith("http") else BASE_SITE
     page_url = _build_list_page_url(base_url, page)
-
-    try_urls = [page_url]
-    alt_url = _build_list_page_url("https://www.porntrex.com/latest-updates/", page)
-    if alt_url not in try_urls:
-        try_urls.append(alt_url)
-
-    html = ""
-    for url in try_urls:
-        try:
-            candidate = await fetch_page(url, referer=referer)
-            if candidate and not _is_blocked_list_html(candidate):
-                html = candidate
-                break
-        except Exception:
-            continue
-
-    if not html or _is_blocked_list_html(html):
+    try:
+        html = await fetch_page(page_url, referer=base_url or BASE_SITE)
+    except Exception:
         return []
 
     soup = BeautifulSoup(html, "lxml")
-    items = _parse_list_items(soup, limit=limit, html=html)
-    if items:
-        return items
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
 
-    for url in try_urls[1:]:
-        try:
-            candidate = await fetch_page(url, referer=referer)
-            if not candidate or _is_blocked_list_html(candidate):
-                continue
-            soup = BeautifulSoup(candidate, "lxml")
-            items = _parse_list_items(soup, limit=limit, html=candidate)
-            if items:
-                return items
-        except Exception:
+    for vid, slug in _VIDEO_HREF_RE.findall(str(soup)):
+        if len(items) >= limit:
+            break
+        href = _canonical_video_url(vid, slug)
+        if href in seen:
+            continue
+        seen.add(href)
+        items.append(
+            {
+                "url": href,
+                "title": "Unknown Video",
+                "thumbnail_url": None,
+                "duration": None,
+                "views": None,
+                "uploader_name": None,
+            }
+        )
+
+    for a in soup.select("a[href*='/video/']"):
+        if len(items) >= limit:
+            break
+        href = _normalize_video_href(a.get("href") or "")
+        if not href or href in seen:
             continue
 
-    return []
+        container = a.find_parent(["article", "li", "div"]) or a
+        img = a.find("img") or (container.find("img") if container else None)
+        thumb = _best_image_url(img)
+
+        title = _clean_list_title(
+            _first_non_empty(
+                a.get("title"),
+                img.get("alt") if img else None,
+                a.get_text(" ", strip=True),
+            )
+        ) or "Unknown Video"
+
+        ctext = container.get_text(" ", strip=True) if container else ""
+        duration = _extract_duration(ctext)
+        views_el = container.select_one(".views") if container else None
+        views_text = views_el.get_text(" ", strip=True) if views_el else None
+        views = _extract_views(views_text) or _extract_views(ctext)
+
+        seen.add(href)
+        for i, existing in enumerate(items):
+            if existing["url"] == href:
+                items[i] = {
+                    "url": href,
+                    "title": title,
+                    "thumbnail_url": thumb or existing.get("thumbnail_url"),
+                    "duration": duration or existing.get("duration"),
+                    "views": views or existing.get("views"),
+                    "uploader_name": None,
+                }
+                break
+        else:
+            items.append(
+                {
+                    "url": href,
+                    "title": title,
+                    "thumbnail_url": thumb,
+                    "duration": duration,
+                    "views": views,
+                    "uploader_name": None,
+                }
+            )
+
+    return items[:limit]

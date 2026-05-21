@@ -2783,7 +2783,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
 
 ## PornTrex (porntrex.com) Implementation Notes
 
-[PornTrex](https://www.porntrex.com/) is a KVS-script tube site (KT player) serving HD/4K catalog pages. Video pages use numeric IDs under `/video/{id}/{slug}/`. **Embed player URLs** (`/embed/{id}`, iframe `src`) are first-class scrape targets and always expose an `format: "embed"` stream for WebView/iframe playback. Streams are exposed via inline `video_url` / `video_alt_url*` keys and signed `/get_file/` MP4 endpoints (same pattern as blowjobs.pro / zeenite). Thumbnails are often on `statics.cdntrex.com`.
+[PornTrex](https://www.porntrex.com/) is a KVS-script tube site (KT player) serving HD/4K catalog pages. Video pages use numeric IDs under `/video/{id}/{slug}/`. Streams are exposed via inline `video_url` / `video_alt_url*` keys and signed `/get_file/` MP4 endpoints (same pattern as blowjobs.pro / zeenite). Thumbnails are often on `statics.cdntrex.com`.
 
 ### Host aliases
 
@@ -2798,25 +2798,16 @@ curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
 - Top rated: `https://www.porntrex.com/top-rated/`
 - Most viewed: `https://www.porntrex.com/most-viewed/`
 - Categories: `https://www.porntrex.com/category/{slug}/` (e.g. `amateur`, `4k-porn`, `teen`)
-- Parse cards in `div.video-item` (or `.video-item-title` parent blocks):
-  - Title: `.video-item-title`
-  - Duration: `.video-item-duration` / `.info.video-item-duration`
-  - Views: `.video-item-views` / `.info.video-item-views`
-  - Thumb: `.screenshot-item` (`ptx.cdntrex.com/.../videos_screenshots/...`, e.g. `300x168//6.jpg`)
-- Fallback: `a[href*='/video/']` → canonical `/video/{id}/{slug}/`
+- Parse cards via `a[href*='/video/']` → canonical `/video/{id}/{slug}/`
 - Pagination: append `/{page}/` to the list path for page &gt; 1 (e.g. `/latest/2/`); `?page=` is used when already present in the base URL
 
 ### Metadata and streams (`scrape`)
 
-- Metadata: `h1` (primary title), then `og:title` / JSON-LD `VideoObject.name`; duration from `.video-item-duration`, `video:duration` meta (seconds), JSON-LD `PT…`, or KT `video_duration` in scripts — not whole-page text scan
-- List cards may glue metadata into one string (`23:1059 853 views 95%1080p HDTitle`); parser splits duration/views/title before cleaning
+- Metadata: `og:*`, `h1`, `.views`, tag/category links
 - **Primary streams:** KT player `video_url` / `video_alt_url*` in page HTML (strip `function/0/` prefix when present) → `/get_file/4/{token}/{folder}/{id}/{file}.mp4/`
 - **Redirect resolution:** follow `/get_file/` with `Referer` + `age_pass=1` cookie to obtain CDN `Location` (optional; unresolved URLs remain playable with Referer)
 - **Qualities:** parse `360p`, `480p`, `720p`, `1080p`, `2160p` from filenames (`1751385_720p.mp4`, etc.)
-- Canonical watch URL: `https://www.porntrex.com/video/{id}/{slug}/`
-- Embed player URL: `https://www.porntrex.com/embed/{id}` (iframe `src`, e.g. `https://www.porntrex.com/embed/3002185`)
-- Scrape embed URLs directly: fetch embed HTML for KT streams; fetch canonical `/video/{id}/…` for title/thumbnail when needed
-- Always include `format: "embed"` stream; default to embed when no direct MP4/HLS resolved
+- Embed fallback: `https://www.porntrex.com/embed/{id}/`
 
 ### Categories (`get_categories`)
 
@@ -2859,8 +2850,4 @@ curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://www.porntrex.com/late
 curl "http://127.0.0.1:8000/api/v1/categories?source=porntrex"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://www.porntrex.com/video/1751385/african-women"
-
-curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
-  -H "Content-Type: application/json" \
-  -d "{\"url\":\"https://www.porntrex.com/embed/3002185\"}"
 ```
