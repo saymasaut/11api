@@ -1,6 +1,6 @@
 [
-  { "name": "Home", "url": "https://www.85po.com/" },
+  { "name": "Latest", "url": "https://www.85po.com/latest-updates/" },
   { "name": "4K", "url": "https://www.85po.com/4k/" },
-  { "name": "Tags", "url": "https://www.85po.com/tags/" },
-  { "name": "Random", "url": "https://www.85po.com/random_video.php" }
+  { "name": "Top Rated", "url": "https://www.85po.com/top-rated/" },
+  { "name": "Most Popular", "url": "https://www.85po.com/most-popular/" }
 ]
