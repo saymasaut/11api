@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
@@ -806,18 +807,33 @@ async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Op
                 resp = await client.head(url, headers=h)
             else:
                 resp = await client.get(url, headers=h)
+        if resp.status_code == 200 and method != "HEAD":
+            ct = (resp.headers.get("content-type") or "").lower()
+            if "video" in ct or "octet-stream" in ct:
+                return url
         if resp.status_code in (301, 302, 303, 307, 308):
             loc = resp.headers.get("Location")
             if not loc:
                 return None
+            if loc.startswith("//"):
+                loc = f"https:{loc}"
+            elif loc.startswith("/"):
+                loc = urljoin(BASE_SITE, loc)
             if _is_non_video_asset_url(loc) or _is_probable_ad_iframe(loc):
                 return None
+            loc_low = loc.lower()
+            if "remote_control.php" in loc_low or "cdntrex.com" in loc_low:
+                return loc
             fmt = _detect_media_format(loc)
             if fmt in ("mp4", "hls"):
                 return loc
         return None
 
+    rnd = int(time.time() * 1000)
     attempts = [
+        (f"{base}/?rnd={rnd}", "HEAD", None),
+        (f"{base}/?rnd={rnd}", "GET", "bytes=0-"),
+        (f"{base}/?rnd={rnd}", "GET", "bytes=0-0"),
         (f"{base}/", "HEAD", None),
         (f"{base}/", "GET", "bytes=0-"),
         (f"{base}/", "GET", "bytes=0-0"),
@@ -843,7 +859,16 @@ def _url_contains_video_id(url: str, video_id: str) -> bool:
         or f"/{vid}." in low
         or f"{vid}.mp4" in low
         or f"%2f{vid}%2f" in low
+        or f"%2f{vid}.mp4" in low
+        or f"file=%2f{vid}" in low
+        or f"file=/{vid}" in low
     )
+
+
+def _mp4_stream_score(item: dict[str, str]) -> int:
+    q = item.get("quality") or ""
+    m = re.search(r"(\d{3,4})", str(q))
+    return int(m.group(1)) if m else 0
 
 
 async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, referer: str) -> None:
@@ -862,24 +887,20 @@ async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, re
     resolved_pairs = await asyncio.gather(*[_resolve_one(s) for s in get_file_mp4])
     for stream, resolved in resolved_pairs:
         if resolved:
+            # CDN signed URLs (remote_control.php) rarely embed the numeric id in the path.
             if video_id and not _url_contains_video_id(resolved, video_id):
-                streams.remove(stream)
-                continue
+                if _detect_media_format(resolved) not in ("mp4", "hls"):
+                    continue
             stream["url"] = resolved
-        else:
-            # Keep original /get_file/ URL (playable with Referer header).
-            pass
+        # If redirect resolution fails, keep the original /get_file/ URL (Referer required).
 
-    direct_mp4 = [
-        s for s in streams if s.get("format") == "mp4" and "get_file" not in (s.get("url") or "")
-    ]
+    mp4_streams = [s for s in streams if s.get("format") == "mp4"]
     hls = next((s for s in streams if s.get("format") == "hls"), None)
     embed = next((s for s in streams if s.get("format") == "embed"), None)
 
-    if direct_mp4:
-        video["default"] = direct_mp4[0]["url"]
-    elif get_file_mp4:
-        video["default"] = get_file_mp4[0]["url"]
+    if mp4_streams:
+        mp4_streams.sort(key=_mp4_stream_score, reverse=True)
+        video["default"] = mp4_streams[0]["url"]
     elif hls:
         video["default"] = hls["url"]
     elif embed:
@@ -888,7 +909,7 @@ async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, re
         video["default"] = None
 
     video["hls"] = hls["url"] if hls else None
-    video["has_video"] = bool(streams)
+    video["has_video"] = bool(mp4_streams) or bool(hls) or bool(embed)
 
 
 def _parse_json_ld_video(soup: BeautifulSoup) -> dict[str, Any]:

@@ -237,7 +237,7 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
     video_data = info["video"]
     
     if quality == "default":
-        stream_url = video_data["default"]
+        stream_url = video_data.get("default")
         selected_quality = "default"
         
         # Try to find the quality metadata of the default stream
@@ -282,10 +282,16 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
         # Preferred mirror is tagged "default" in some scrapers; playback is still embed/WebView.
         if str(fmt).lower() == "default":
             fmt = "embed"
-    elif ".m3u8" in stream_url:
+    elif stream_url and ".m3u8" in stream_url:
         fmt = "hls"
         if selected_quality == "default":
             selected_quality = "adaptive"
+
+    if not stream_url:
+        raise HTTPException(
+            status_code=404,
+            detail="No playable stream URL found for this video.",
+        )
 
     # Build base response
     response = {
@@ -293,6 +299,8 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
         "quality": selected_quality,
         "format": fmt,
     }
+    if "porntrex.com" in parsed_url.netloc.lower():
+        response["referer"] = url
     
     # Add available_qualities for Pornhub, YouPorn, and RedTube
     from urllib.parse import urlparse
@@ -356,7 +364,8 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
         "static.eporner.com" in parsed_url.netloc.lower() or
         "porntrex.com" in parsed_url.netloc.lower() or
         "cdntrex.com" in parsed_url.netloc.lower() or
-        "ptx.cdntrex.com" in parsed_url.netloc.lower()):
+        "ptx.cdntrex.com" in parsed_url.netloc.lower() or
+        "statics.cdntrex.com" in parsed_url.netloc.lower()):
         qualities: dict[str, Any] = {}
         all_streams = video_data.get("streams", [])
         host_l = parsed_url.netloc.lower()
@@ -412,6 +421,8 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
             or "porntrex.com" in host_l
             or "cdntrex.com" in host_l
             or "ptx.cdntrex.com" in host_l
+            or "statics.cdntrex.com" in host_l
+            or host_l.endswith(".cdntrex.com")
         )
         
         # Debug logging for RedTube
