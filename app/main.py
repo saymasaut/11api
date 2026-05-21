@@ -32,7 +32,7 @@ from app.api.endpoints import hls, media, explore, thumbnails, one_xbet, ads, no
 from fastapi import APIRouter
 
 # Scrapers & Models
-from app.scrapers import masa49, xhamster, xnxx, xvideos, pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rule34video, haho, hanime, rouvideo, cg51, oppai, xmoviesforyou, tnaflix, hornysimp, pimpbunny, hentaiser, bollywoodmaal, viralkand, blowjobspro, blackporn24, lesbianporn8, milfporn8, indianporn365, mmsbro, kamababa, desimms2, desiporn, thotsporn, leakedamateurporn, zeenite, uncutmaza, mydesimms, po85, cosxplay, memojav, hohoj, ggjav, porn87, goodav, kanav, missav, jable, tianmei, bindasmood, eporner
+from app.scrapers import masa49, xhamster, xnxx, xvideos, pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rule34video, haho, hanime, rouvideo, cg51, oppai, xmoviesforyou, tnaflix, hornysimp, pimpbunny, hentaiser, bollywoodmaal, viralkand, blowjobspro, blackporn24, lesbianporn8, milfporn8, indianporn365, mmsbro, kamababa, desimms2, desiporn, thotsporn, leakedamateurporn, zeenite, uncutmaza, mydesimms, po85, cosxplay, memojav, hohoj, ggjav, porn87, goodav, kanav, missav, jable, tianmei, bindasmood, eporner, porntrex
 from app.models.schemas import ScrapeResponse, VideoInfoResponse, ListItem, CategoryItem, ScrapeRequest, ListRequest
 
 logging.basicConfig(level=logging.INFO)
@@ -178,6 +178,7 @@ async def _scrape_dispatch(url: str, host: str) -> dict[str, object]:
     if tianmei.can_handle(host): return await tianmei.scrape(url)
     if bindasmood.can_handle(host): return await bindasmood.scrape(url)
     if eporner.can_handle(host): return await eporner.scrape(url)
+    if porntrex.can_handle(host): return await porntrex.scrape(url)
     raise HTTPException(status_code=400, detail="Unsupported host")
 
 async def _list_dispatch(base_url: str, host: str, page: int, limit: int) -> list[dict[str, object]]:
@@ -240,6 +241,7 @@ async def _list_dispatch(base_url: str, host: str, page: int, limit: int) -> lis
     if tianmei.can_handle(host): return await tianmei.list_videos(base_url=base_url, page=page, limit=limit)
     if bindasmood.can_handle(host): return await bindasmood.list_videos(base_url=base_url, page=page, limit=limit)
     if eporner.can_handle(host): return await eporner.list_videos(base_url=base_url, page=page, limit=limit)
+    if porntrex.can_handle(host): return await porntrex.list_videos(base_url=base_url, page=page, limit=limit)
     raise HTTPException(status_code=400, detail="Unsupported host")
 
 async def _crawl_dispatch(base_url: str, host: str, start_page: int, max_pages: int, per_page_limit: int, max_items: int) -> list[dict[str, object]]:
@@ -438,6 +440,7 @@ async def get_categories(source: str) -> list[CategoryItem]:
         if s in ("tianmei", "94mt", "94mtcc", "tianmeione"): return [CategoryItem(**c) for c in tianmei.get_categories()]
         if s == "bindasmood" or s == "bindas": return [CategoryItem(**c) for c in bindasmood.get_categories()]
         if s == "eporner": return [CategoryItem(**c) for c in eporner.get_categories()]
+        if s == "porntrex": return [CategoryItem(**c) for c in porntrex.get_categories()]
         raise HTTPException(status_code=400, detail="Unknown source")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load categories: {str(e)}")
