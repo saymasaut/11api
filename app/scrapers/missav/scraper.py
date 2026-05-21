@@ -52,14 +52,12 @@ _RESERVED_SLUGS = frozenset(
     }
 )
 
+_DM_PREFIX_RE = re.compile(r"^dm\d+$", re.IGNORECASE)
 _VIDEO_PAGE_RE = re.compile(
-    r"^https?://(?:www\.)?missav\.ai/(?:(?P<locale>[a-z]{2}(?:-[a-z]+)?)/)?(?P<dvd>[a-z0-9][a-z0-9-]*)/?$",
+    r"^https?://(?:www\.)?missav\.ai/(?:(?P<dm>dm\d+)/)?(?:(?P<locale>[a-z]{2}(?:-[a-z]+)?)/)?(?P<dvd>[a-z0-9][a-z0-9-]*)/?$",
     re.IGNORECASE,
 )
-_VIDEO_HREF_RE = re.compile(
-    r"^https?://(?:www\.)?missav\.ai/(?:(?P<locale>[a-z]{2}(?:-[a-z]+)?)/)?(?P<dvd>[a-z0-9][a-z0-9-]*)/?$",
-    re.IGNORECASE,
-)
+_VIDEO_HREF_RE = _VIDEO_PAGE_RE
 _EVAL_BLOCK_RE = re.compile(
     r"return p\}\('(.+?)',(\d+),(\d+),'([^']+)'\.split\('\|'\)",
     re.DOTALL,
@@ -144,38 +142,63 @@ def _is_video_slug(slug: str) -> bool:
     s = (slug or "").lower().strip("/")
     if not s or s in _RESERVED_SLUGS:
         return False
-    if s.startswith("dm") and s[2:].isdigit():
+    if _DM_PREFIX_RE.match(s):
         return False
     if "/" in s:
         return False
-    return bool(re.fullmatch(r"[a-z0-9][a-z0-9-]*", s)) and ("-" in s or any(c.isdigit() for c in s))
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", s):
+        return False
+    # Browse slugs are short (fc2, siro); videos use hyphenated codes (fc2-ppv-1144330).
+    return "-" in s
+
+
+def _parse_video_path_parts(parts: list[str]) -> tuple[Optional[str], Optional[str]]:
+    """Return (locale, dvd_id) from URL path segments."""
+    if not parts:
+        return None, None
+    i = 0
+    if _DM_PREFIX_RE.match(parts[0]):
+        i = 1
+    if i >= len(parts):
+        return None, None
+    locale: Optional[str] = None
+    if parts[i].lower() in _LOCALES:
+        locale = parts[i].lower().split("-")[0]
+        i += 1
+    if i >= len(parts):
+        return locale, None
+    dvd = parts[i].lower()
+    if len(parts) > i + 1:
+        return locale, None
+    if not _is_video_slug(dvd):
+        return locale, None
+    return locale or "en", dvd
 
 
 def _extract_dvd_id(url: str) -> Optional[str]:
     raw = (url or "").strip().split("#", 1)[0].split("?", 1)[0]
     m = _VIDEO_PAGE_RE.match(raw if raw.endswith("/") else raw + "/")
-    if not m:
-        parsed = urlparse(raw)
-        host = (parsed.netloc or "").lower().replace("www.", "")
-        if host != SITE_HOST:
+    if m:
+        dvd = (m.group("dvd") or "").lower()
+        locale = (m.group("locale") or "").lower()
+        if locale and locale.split("-")[0] not in _LOCALES and locale not in _LOCALES:
+            if _is_video_slug(locale):
+                return locale
             return None
-        parts = [p for p in (parsed.path or "").split("/") if p]
-        if not parts:
-            return None
-        if parts[0].lower() in _LOCALES and len(parts) >= 2:
-            slug = parts[1].lower()
-        elif parts[0].lower().startswith("dm") and parts[0][2:].isdigit():
-            return None
-        else:
-            slug = parts[0].lower()
-        return slug if _is_video_slug(slug) else None
-    locale = (m.group("locale") or "").lower()
-    dvd = (m.group("dvd") or "").lower()
-    if locale.split("-")[0] in _LOCALES or locale in _LOCALES:
         return dvd if _is_video_slug(dvd) else None
-    if _is_video_slug(locale):
-        return locale
-    return dvd if _is_video_slug(dvd) else None
+    parsed = urlparse(raw)
+    if (parsed.netloc or "").lower().replace("www.", "") != SITE_HOST:
+        return None
+    parts = [p for p in (parsed.path or "").split("/") if p]
+    _, dvd = _parse_video_path_parts(parts)
+    return dvd
+
+
+def _locale_from_url(url: str) -> str:
+    parsed = urlparse((url or "").strip().split("?", 1)[0])
+    parts = [p for p in (parsed.path or "").split("/") if p]
+    locale, _ = _parse_video_path_parts(parts)
+    return locale or "en"
 
 
 def _canonical_video_url(dvd_id: str, *, locale: str = "en") -> str:
@@ -193,25 +216,20 @@ def _normalize_video_href(href: str) -> Optional[str]:
     elif href.startswith("/"):
         href = f"{BASE_SITE.rstrip('/')}{href}"
     m = _VIDEO_HREF_RE.match(href if href.endswith("/") else href + "/")
-    if not m:
-        parsed = urlparse(href)
-        if (parsed.netloc or "").lower().replace("www.", "") != SITE_HOST:
+    if m:
+        dvd = (m.group("dvd") or "").lower()
+        if not _is_video_slug(dvd):
             return None
-        parts = [p for p in (parsed.path or "").split("/") if p]
-        if parts and parts[0].lower() in _LOCALES and len(parts) >= 2:
-            slug = parts[1].lower()
-        elif parts:
-            slug = parts[-1].lower()
-        else:
-            return None
-        if not _is_video_slug(slug):
-            return None
-        return _canonical_video_url(slug)
-    dvd = (m.group("dvd") or "").lower()
-    if not _is_video_slug(dvd):
+        loc = (m.group("locale") or "en").lower().split("-")[0]
+        return _canonical_video_url(dvd, locale=loc or "en")
+    parsed = urlparse(href)
+    if (parsed.netloc or "").lower().replace("www.", "") != SITE_HOST:
         return None
-    loc = (m.group("locale") or "en").lower()
-    return _canonical_video_url(dvd, locale=loc.split("-")[0] if loc else "en")
+    parts = [p for p in (parsed.path or "").split("/") if p]
+    locale, dvd = _parse_video_path_parts(parts)
+    if not dvd:
+        return None
+    return _canonical_video_url(dvd, locale=locale or "en")
 
 
 def _best_image_url(img: Any) -> Optional[str]:
@@ -459,14 +477,28 @@ async def scrape(url: str) -> dict[str, Any]:
     if not dvd_id:
         raise ValueError(f"Unsupported MissAV URL: {url}")
 
-    parsed = urlparse(url)
-    parts = [p for p in (parsed.path or "").split("/") if p]
-    locale = "en"
-    if parts and parts[0].lower() in _LOCALES:
-        locale = parts[0].lower().split("-")[0]
+    locale = _locale_from_url(url)
+    fetch_urls = [
+        _canonical_video_url(dvd_id, locale=locale),
+        (url or "").strip().split("#", 1)[0].split("?", 1)[0],
+        f"https://{SITE_HOST}/{dvd_id}",
+    ]
+    seen_fetch: set[str] = set()
+    html: str | None = None
+    page_url = fetch_urls[0]
+    for candidate in fetch_urls:
+        if not candidate or candidate in seen_fetch:
+            continue
+        seen_fetch.add(candidate)
+        try:
+            html = await fetch_page(candidate, referer=BASE_SITE)
+            page_url = candidate
+            break
+        except Exception:
+            continue
+    if html is None:
+        raise ValueError(f"Failed to fetch MissAV page for {dvd_id}")
 
-    page_url = _canonical_video_url(dvd_id, locale=locale)
-    html = await fetch_page(page_url, referer=BASE_SITE)
     video_data = _streams_from_player(html, dvd_id=dvd_id)
     return parse_video_page(html, page_url, video=video_data)
 

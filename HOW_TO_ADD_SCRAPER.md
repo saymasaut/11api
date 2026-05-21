@@ -2463,7 +2463,7 @@ curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://kanav.ad/index.php/
 
 ### Metadata and streams (`scrape`)
 
-- Canonical page: `https://missav.ai/en/{dvd-slug}` (also accept `https://missav.ai/{dvd-slug}`)
+- Canonical page: `https://missav.ai/en/{dvd-slug}` (also accept `https://missav.ai/{dvd-slug}` and mirror paths like `https://missav.ai/dm1/en/{dvd-slug}`)
 - Metadata: `og:title`, `og:image` (`fourhoi.com/{slug}/cover-n.jpg`), `og:video:duration` (seconds), `og:video:release_date`, `<h1>`, actress/genre links
 - Streams: locate `eval(function(p,a,c,k,e,d){...}('e=\'...\';c=\'...\';b=\'...\';',15,15,'m3u8|...|surrit|https|...'.split('|'),0,{}))` → decode digit placeholders against the split array; `d` in the template is the `dvdId` slug → master HLS is variable `e`, e.g. `https://surrit.com/{hash}/{dvd-slug}.m3u8`
 - `dvdId` is also exposed in Alpine `x-data` as `dvdId: 'fc2-ppv-1434674'`
