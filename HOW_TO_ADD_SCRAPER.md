@@ -2032,3 +2032,69 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=cosxplay"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://cosxplay.com/78642-furries-2022-fursuit-yiff-murrsuit-oral-butt-point-of-view-amaze-anal-cosplay-furry/"
 ```
+
+## MemoJav Implementation Notes
+
+[MemoJav](https://memojav.com/) is a JAV catalog site. Canonical video pages use `/video/{CODE}` **without** a trailing slash (for example `/video/START-579` — `/video/START-579/` returns 404). Listings use `a.video-item` cards with `img.video-poster`; pagination is `page-{n}` under the current section path (for example `/video/page-2/`).
+
+### Host aliases
+
+- `memojav.com`
+- `www.memojav.com`
+
+### Listing and pagination (`list_videos`)
+
+- Home: `https://memojav.com/`
+- Best: `https://memojav.com/best/`
+- New: `https://memojav.com/video/`
+- Page 2 on new videos: `https://memojav.com/video/page-2/`
+- Parse `a.video-item[href]` → title from `.video-title`, thumb from `img.video-poster`
+
+### Metadata and streams (`scrape`)
+
+- Metadata: `og:*`, `#title`, `#title-description`, `var mm = {type,id,vi}`, schema `itemprop="duration"` (`PT123M0S`), actress link, trailer `#preview-vid`.
+- Full movie streams come from `/hls/get_video_info.php?id={CODE}&sig=...&sts=...` (same `video_sig()` algorithm as `static/main.js`). Response is JSON prefixed with `for (;;);`.
+  - `type: "hls"` → `master.m3u8` on `video*.memojav.net` (preferred default).
+  - `type: "mp4"` → base URL with `=m37` / `=m22` / `=m18` quality suffixes (JW Player convention).
+- Always include embed fallback: `https://memojav.com/embed/{CODE}`.
+
+### Categories (`get_categories`)
+
+Seed from nav: Hot Videos (home), Best, New, Actress, Studio, Series, Categories, Label, Director.
+
+### Registration checklist for MemoJav
+
+Besides creating `backend/app/scrapers/memojav/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=memojav` or `source=memo`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `memojav.com`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="memojav"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### MemoJav verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://memojav.com/video/START-579\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://memojav.com/video/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=memojav"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://memojav.com/video/START-579"
+```
