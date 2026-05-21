@@ -1966,3 +1966,69 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=po85"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://www.85po.com/v/30261/zi-cuo-ri--5/"
 ```
+
+## CosXplay Implementation Notes
+
+[CosXplay](https://cosxplay.com/) is a WordPress **kolortube** cosplay tube. Canonical video pages use `/{post_id}-{slug}/` (for example `/78642-furries-2022-.../`). Listings use `.video-block[data-post-id]` cards; pagination is WordPress-style `/page/{n}/` (including on category paths).
+
+Use `hornysimp` for embed fallbacks and `zeenite` for JSON-LD + stream ordering patterns.
+
+### Host aliases
+
+- `cosxplay.com`
+- `www.cosxplay.com`
+
+### Listing and pagination (`list_videos`)
+
+- Home: `https://cosxplay.com/` → page 2 is `https://cosxplay.com/page/2/`
+- Category: `https://cosxplay.com/7841-nier-automata/` → `https://cosxplay.com/7841-nier-automata/page/2/`
+- Parse cards via `div.video-block[data-post-id]` → `a.infos[href]` / `a.thumb[href]`
+- Only accept single-segment `/{id}-{slug}/` URLs (exclude `/tag/`, `/categories/`, `/embed/`, etc.)
+
+### Metadata and streams (`scrape`)
+
+- Metadata: `og:*`, JSON-LD `VideoObject` (`name`, `description`, `thumbnailUrl`, `duration`, `contentUrl`, `embedUrl`, `interactionStatistic`), and inline `toStore` (`views`, `length`, `preview`).
+- Streams: signed MP4 on `xcdn*.nosofiles.com` (`*_high.mp4`, `*_low.mp4`) from `<video><source>`, inline `videoHigh` / `videoLow` JS, and JSON-LD `contentUrl`. Skip `trailer.mp4` / poster assets.
+- Optional embed stream from JSON-LD `embedUrl` (`https://cosxplay.com/embed/{id}`) when direct MP4 is unavailable.
+- Cloudflare may challenge bare requests; send `Referer: https://cosxplay.com/` (homepage first helps for curl/manual tests).
+
+### Categories (`get_categories`)
+
+Seed from nav: Home, Categories, Cosplay Girls, Tags, plus popular character/genre hubs from the mobile category menu.
+
+### Registration checklist for CosXplay
+
+Besides creating `backend/app/scrapers/cosxplay/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=cosxplay` or `source=cosx`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `cosxplay.com`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="cosxplay"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### CosXplay verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://cosxplay.com/78642-furries-2022-fursuit-yiff-murrsuit-oral-butt-point-of-view-amaze-anal-cosplay-furry/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://cosxplay.com/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=cosxplay"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://cosxplay.com/78642-furries-2022-fursuit-yiff-murrsuit-oral-butt-point-of-view-amaze-anal-cosplay-furry/"
+```

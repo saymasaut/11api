@@ -87,6 +87,7 @@ class ScrapeRequest(BaseModel):
             "uncutmaza.cc",
             "mydesimms.watch",
             "85po.com",
+            "cosxplay.com",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v
@@ -167,6 +168,7 @@ class ListRequest(BaseModel):
             "uncutmaza.cc",
             "mydesimms.watch",
             "85po.com",
+            "cosxplay.com",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v
