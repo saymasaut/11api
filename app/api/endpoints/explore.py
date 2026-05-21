@@ -401,7 +401,7 @@ EXPLORE_SOURCES = [
         searchUrlTemplate="https://www.85po.com/tags/?q={query}",
         sourceId="po85",
         disable=False,
-        pageSize=30,
+        pageSize=60,
     ),
     ExploreSourceResponse(
         baseUrl="https://cosxplay.com/",
@@ -414,7 +414,7 @@ EXPLORE_SOURCES = [
         searchUrlTemplate="https://cosxplay.com/?s={query}",
         sourceId="cosxplay",
         disable=False,
-        pageSize=30,
+        pageSize=48,
     ),
     ExploreSourceResponse(
         baseUrl="https://memojav.com/",

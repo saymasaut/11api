@@ -1982,7 +1982,7 @@ Use `hornysimp` for embed fallbacks and `zeenite` for JSON-LD + stream ordering 
 
 - Home: `https://cosxplay.com/` → page 2 is `https://cosxplay.com/page/2/`
 - Category: `https://cosxplay.com/7841-nier-automata/` → `https://cosxplay.com/7841-nier-automata/page/2/`
-- Parse cards via `div.video-block[data-post-id]` → `a.infos[href]` / `a.thumb[href]`
+- Parse cards via `div.video-block[data-post-id]` → `a.infos[href]` / `a.thumb[href]`; duration from `.video-datas span.duration.notranslate` (or `span.duration` on the card)
 - Only accept single-segment `/{id}-{slug}/` URLs (exclude `/tag/`, `/categories/`, `/embed/`, etc.)
 
 ### Metadata and streams (`scrape`)

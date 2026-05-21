@@ -115,13 +115,31 @@ def _normalize_numberish(value: str | None) -> Optional[str]:
     return txt.upper() or None
 
 
+def _format_seconds(total_sec: int) -> str:
+    if total_sec <= 0:
+        return "0:00"
+    h, rem = divmod(total_sec, 3600)
+    m, s = divmod(rem, 60)
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
 def _extract_duration(text: str | None) -> Optional[str]:
     if not text:
         return None
-    m = re.search(r"\b(?:\d{1,2}:){1,2}\d{2}\b", text)
+    raw = str(text).strip()
+    m = re.search(r"\b(?:\d{1,2}:){1,2}\d{2}\b", raw)
     if m:
         return m.group(0)
-    iso = re.match(r"^P(?:\d+Y)?(?:\d+M)?(?:\d+D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$", text.strip(), re.I)
+    if raw.isdigit():
+        sec = int(raw)
+        if 0 < sec < 86400:
+            return _format_seconds(sec)
+    min_m = re.search(r"\b(\d{1,3})\s*min(?:ute)?s?\b", raw, flags=re.IGNORECASE)
+    if min_m:
+        return _format_seconds(int(min_m.group(1)) * 60)
+    iso = re.match(r"^P(?:\d+Y)?(?:\d+M)?(?:\d+D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$", raw, re.I)
     if iso:
         h = int(iso.group(1) or 0)
         m_val = int(iso.group(2) or 0)
@@ -129,6 +147,29 @@ def _extract_duration(text: str | None) -> Optional[str]:
         if h > 0:
             return f"{h}:{m_val:02d}:{s:02d}"
         return f"{m_val}:{s:02d}"
+    return None
+
+
+def _duration_from_element(container: BeautifulSoup | Any) -> Optional[str]:
+    if container is None:
+        return None
+    for sel in (
+        ".video-datas .duration.notranslate",
+        ".video-datas .duration",
+        "span.duration.notranslate",
+        "span.duration",
+        ".duration.notranslate",
+        ".duration",
+    ):
+        el = container.select_one(sel)
+        if not el:
+            continue
+        duration = _extract_duration(el.get_text(" ", strip=True))
+        if duration:
+            return duration
+        duration = _extract_duration(el.get("title") or el.get("content") or el.get("datetime"))
+        if duration:
+            return duration
     return None
 
 
@@ -439,10 +480,16 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
                     preview_url = _first_non_empty(preview_url, val)
                 elif out == "duration":
                     duration = _extract_duration(_first_non_empty(duration, val))
+        if not duration:
+            lm = re.search(r'"length"\s*:\s*(\d+)', blob)
+            if lm:
+                duration = _extract_duration(lm.group(1))
         vm = re.search(r'"views"\s*:\s*(\d+)', blob)
         if vm and not views:
             views = _normalize_numberish(vm.group(1))
 
+    if not duration:
+        duration = _duration_from_element(soup)
     if not duration:
         duration = _extract_duration(soup.get_text(" ", strip=True))
     if not views:
@@ -537,8 +584,7 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
         thumb = _thumb_from_video_block(block)
 
         ctext = block.get_text(" ", strip=True)
-        duration_el = block.select_one(".duration")
-        duration = _extract_duration(duration_el.get_text(" ", strip=True) if duration_el else None)
+        duration = _duration_from_element(block)
         if not duration:
             duration = _extract_duration(ctext)
 
