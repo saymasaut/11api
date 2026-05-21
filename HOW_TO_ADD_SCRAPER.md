@@ -1921,7 +1921,7 @@ def can_handle(host: str) -> bool:
 
 ### Metadata and streams (`scrape`)
 
-- Metadata: `og:*`, `h1`, visible duration (`mm:ss` / `hh:mm:ss`), views from `.views` or card text.
+- Metadata: `og:*`, `h1`, visible duration (`mm:ss` / `hh:mm:ss`), views from `svg.icon-eye` parent (`.thumb-item` on cards, `.count-item` on detail).
 - Streams: inline `/get_file/.../*.mp4` links in HTML; filter screenshot/preview assets (`preview_preview.mp4.jpg`, `/contents/videos_screenshots/`).
 - Resolve each `get_file` URL with the video page as `Referer` (HEAD/GET + `Range`) to the signed CDN redirect before returning `video.streams` (same pattern as Zeenite).
 - Prefer highest `NNNp` MP4 as `video.default`.
