@@ -24,7 +24,7 @@ async def get_video_info(url: str, api_base_url: str = "http://localhost:8000") 
         }
     """
     # Import here to avoid circular dependency
-    from app.scrapers import xnxx, xhamster, xvideos, masa49, pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rule34video, haho, hanime, rouvideo, cg51, oppai, xmoviesforyou, tnaflix, hornysimp, pimpbunny, hentaiser, bollywoodmaal, viralkand, blowjobspro, blackporn24, lesbianporn8, milfporn8, indianporn365, mmsbro, kamababa, desimms2, desiporn, thotsporn, leakedamateurporn, zeenite, uncutmaza, mydesimms, po85, cosxplay, memojav, hohoj, ggjav, porn87, goodav
+    from app.scrapers import xnxx, xhamster, xvideos, masa49, pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rule34video, haho, hanime, rouvideo, cg51, oppai, xmoviesforyou, tnaflix, hornysimp, pimpbunny, hentaiser, bollywoodmaal, viralkand, blowjobspro, blackporn24, lesbianporn8, milfporn8, indianporn365, mmsbro, kamababa, desimms2, desiporn, thotsporn, leakedamateurporn, zeenite, uncutmaza, mydesimms, po85, cosxplay, memojav, hohoj, ggjav, porn87, goodav, kanav
     from app.api.endpoints import thumbnails
     from urllib.parse import urlparse
     
@@ -142,10 +142,12 @@ async def get_video_info(url: str, api_base_url: str = "http://localhost:8000") 
         scraper_module = porn87
     elif goodav.can_handle(host):
         scraper_module = goodav
+    elif kanav.can_handle(host):
+        scraper_module = kanav
     else:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported host: {host}. Supported: xnxx, xhamster, xvideos, masa49 (.org/.com/.cam), pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, urshort.live (embed), pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rou.video, 51cg/chigua, oppai.stream, xmoviesforyou.com, tnaflix.com, hornysimp.com, pimpbunny.com, hentaiser.app, bollywoodmaal.com, viralkand.com, blowjobs.pro, blackporn24.com, lesbianporn8.net, milfporn8.net, indianporn365.xyz, mmsbro.com, thekamababa.com, desimms2.site, desiporn.one, thotsporn.com, leakedamateurporn.xyz, zeenite.com, uncutmazaa.com (uncutmaza.com/.cc rewrite), mydesimms.watch, 85po.com, cosxplay.com, memojav.com, hohoj.tv, ggjav.com, porn87.com, goodav17.com"
+            detail=f"Unsupported host: {host}. Supported: xnxx, xhamster, xvideos, masa49 (.org/.com/.cam), pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, urshort.live (embed), pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rou.video, 51cg/chigua, oppai.stream, xmoviesforyou.com, tnaflix.com, hornysimp.com, pimpbunny.com, hentaiser.app, bollywoodmaal.com, viralkand.com, blowjobs.pro, blackporn24.com, lesbianporn8.net, milfporn8.net, indianporn365.xyz, mmsbro.com, thekamababa.com, desimms2.site, desiporn.one, thotsporn.com, leakedamateurporn.xyz, zeenite.com, uncutmazaa.com (uncutmaza.com/.cc rewrite), mydesimms.watch, 85po.com, cosxplay.com, memojav.com, hohoj.tv, ggjav.com, porn87.com, goodav17.com, kanav.ad"
         )
     
     try:
@@ -324,7 +326,10 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
         "ggjav.tv" in parsed_url.netloc.lower() or
         "porn87.com" in parsed_url.netloc.lower() or
         "porn87.tv" in parsed_url.netloc.lower() or
-        "goodav17.com" in parsed_url.netloc.lower()):
+        "goodav17.com" in parsed_url.netloc.lower() or
+        "kanav.ad" in parsed_url.netloc.lower() or
+        "11yun.xyz" in parsed_url.netloc.lower() or
+        "11yun.space" in parsed_url.netloc.lower()):
         qualities: dict[str, Any] = {}
         all_streams = video_data.get("streams", [])
         host_l = parsed_url.netloc.lower()
@@ -362,6 +367,9 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
             or "cdn-1.porn87.com" in host_l
             or "cdn-2.porn87.com" in host_l
             or "cdn-3.porn87.com" in host_l
+            or "kanav.ad" in host_l
+            or "11yun.xyz" in host_l
+            or "11yun.space" in host_l
         )
         
         # Debug logging for RedTube

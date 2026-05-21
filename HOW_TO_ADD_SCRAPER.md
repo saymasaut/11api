@@ -2377,3 +2377,70 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=goodav"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=http://goodav17.com/html/20818/"
 ```
+
+## KanAV Implementation Notes
+
+[KanAV](https://kanav.ad/) (`kanav.ad`) is a MacCMS (苹果CMS) JAV site. Listings link to play pages; the player exposes `player_aaaa` JSON with `encrypt: 2` and a base64-encoded HLS URL (decoded per MacCMS `player.js`: base64 then `unescape`).
+
+### Host aliases
+
+- `kanav.ad`
+- `www.kanav.ad`
+
+### Listing and pagination (`list_videos`)
+
+- Home: `https://kanav.ad/` (section grids; for page &gt; 1 prefer a type URL)
+- Categories: `https://kanav.ad/index.php/vod/type/id/{type_id}.html`
+- Page *n* &gt; 1: `https://kanav.ad/index.php/vod/type/id/{type_id}/page/{n}.html`
+- Parse `a[href*="/index.php/vod/play/id/"]`; merge duplicate IDs; title from link text or `img[alt]`
+- Thumbs on `img.11yun.xyz`
+
+### Metadata and streams (`scrape`)
+
+- Canonical play URL: `https://kanav.ad/index.php/vod/play/id/{ID}/sid/1/nid/1.html`
+- Also accept `/index.php/vod/detail/id/{ID}.html` (same ID, fetches play page)
+- Streams: parse `player_aaaa={...}` from play HTML → `"url"` field → base64 decode when `encrypt==2` → `.m3u8` on `*.11yun.space` / `*.11yun.xyz`
+- Title from `vod_data.vod_name`, `og:title`, or `<title>`
+
+### Categories (`get_categories`)
+
+Seed from nav type links: Home, 中文字幕 (id=1), 日韩有码, 日韩无码, 国产AV, etc.
+
+### Registration checklist for KanAV
+
+Besides creating `backend/app/scrapers/kanav/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=kanav`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `kanav.ad`, `11yun.xyz`, `11yun.space`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="kanav"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### KanAV verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://kanav.ad/index.php/vod/play/id/111060/sid/1/nid/1.html\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://kanav.ad/index.php/vod/type/id/1.html&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://kanav.ad/index.php/vod/type/id/1.html&page=2&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=kanav"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://kanav.ad/index.php/vod/play/id/111060/sid/1/nid/1.html"
+```
