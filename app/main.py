@@ -32,7 +32,7 @@ from app.api.endpoints import hls, media, explore, thumbnails, one_xbet, ads, no
 from fastapi import APIRouter
 
 # Scrapers & Models
-from app.scrapers import masa49, xhamster, xnxx, xvideos, pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rule34video, haho, hanime, rouvideo, cg51, oppai, xmoviesforyou, tnaflix, hornysimp, pimpbunny, hentaiser, bollywoodmaal, viralkand, blowjobspro, blackporn24, lesbianporn8, milfporn8, indianporn365, mmsbro, kamababa, desimms2, desiporn, thotsporn, leakedamateurporn, zeenite, uncutmaza, mydesimms, po85, cosxplay, memojav, hohoj, ggjav, porn87
+from app.scrapers import masa49, xhamster, xnxx, xvideos, pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rule34video, haho, hanime, rouvideo, cg51, oppai, xmoviesforyou, tnaflix, hornysimp, pimpbunny, hentaiser, bollywoodmaal, viralkand, blowjobspro, blackporn24, lesbianporn8, milfporn8, indianporn365, mmsbro, kamababa, desimms2, desiporn, thotsporn, leakedamateurporn, zeenite, uncutmaza, mydesimms, po85, cosxplay, memojav, hohoj, ggjav, porn87, goodav
 from app.models.schemas import ScrapeResponse, VideoInfoResponse, ListItem, CategoryItem, ScrapeRequest, ListRequest
 
 logging.basicConfig(level=logging.INFO)
@@ -171,6 +171,7 @@ async def _scrape_dispatch(url: str, host: str) -> dict[str, object]:
     if hohoj.can_handle(host): return await hohoj.scrape(url)
     if ggjav.can_handle(host): return await ggjav.scrape(url)
     if porn87.can_handle(host): return await porn87.scrape(url)
+    if goodav.can_handle(host): return await goodav.scrape(url)
     raise HTTPException(status_code=400, detail="Unsupported host")
 
 async def _list_dispatch(base_url: str, host: str, page: int, limit: int) -> list[dict[str, object]]:
@@ -226,6 +227,7 @@ async def _list_dispatch(base_url: str, host: str, page: int, limit: int) -> lis
     if hohoj.can_handle(host): return await hohoj.list_videos(base_url=base_url, page=page, limit=limit)
     if ggjav.can_handle(host): return await ggjav.list_videos(base_url=base_url, page=page, limit=limit)
     if porn87.can_handle(host): return await porn87.list_videos(base_url=base_url, page=page, limit=limit)
+    if goodav.can_handle(host): return await goodav.list_videos(base_url=base_url, page=page, limit=limit)
     raise HTTPException(status_code=400, detail="Unsupported host")
 
 async def _crawl_dispatch(base_url: str, host: str, start_page: int, max_pages: int, per_page_limit: int, max_items: int) -> list[dict[str, object]]:
@@ -417,6 +419,7 @@ async def get_categories(source: str) -> list[CategoryItem]:
         if s == "hohoj" or s == "hohojtv": return [CategoryItem(**c) for c in hohoj.get_categories()]
         if s == "ggjav" or s == "ggjavtv": return [CategoryItem(**c) for c in ggjav.get_categories()]
         if s == "porn87" or s == "porn87tv": return [CategoryItem(**c) for c in porn87.get_categories()]
+        if s == "goodav" or s == "goodav17": return [CategoryItem(**c) for c in goodav.get_categories()]
         raise HTTPException(status_code=400, detail="Unknown source")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load categories: {str(e)}")

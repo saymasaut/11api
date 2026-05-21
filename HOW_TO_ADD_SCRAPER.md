@@ -2310,3 +2310,70 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=porn87"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://porn87.com/main/html?id=5952"
 ```
+
+## GoodAV (正妹AV) Implementation Notes
+
+[GoodAV](http://goodav17.com/) (`goodav17.com`) is a JAV catalog in the GGJAV CDN family. Video pages use `/html/{ID}/`; playback is via an embedded `ggjav.com/main/embed?u={base64_mp4_path}&site=goodav` iframe (HLS on `video-*.ggjav.com` / `cdn-*.ggjav.com`).
+
+### Host aliases
+
+- `goodav17.com`
+- `www.goodav17.com`
+
+### Listing and pagination (`list_videos`)
+
+- Home (latest): `http://goodav17.com/` — page *n* &gt; 1 is `http://goodav17.com/{n}/`
+- Types: `http://goodav17.com/type/{name}/{page}/` (e.g. `/type/無碼/1/`, page 2 → `/type/無碼/2/`)
+- Actresses: `http://goodav17.com/actor/{name}/{page}/`
+- VR: `http://goodav17.com/vr/{page}/`
+- Homemade: `http://goodav17.com/local/{page}/`
+- Parse cards in `div.movie` → `a[href*="/html/"]`; thumbs from `img` (`src`, `large_image` on `cdn-*.ggjav.com`)
+
+### Metadata and streams (`scrape`)
+
+- Metadata: `og:*`, title, tag/actor links (`/type/`, `/actor/`)
+- Streams: read `iframe#video_frame` → GGJAV embed URL → decode `u` query (base64 MP4 path) → `{path}/index.m3u8`, or fetch embed HTML for `videoSrc` (same helpers as `ggjav` scraper)
+- Embed fallback: the GGJAV embed URL from the iframe
+
+### Categories (`get_categories`)
+
+Seed from nav: Home, sample types (無碼, 人妻, 巨乳, 中出), VR, Asian Homemade, sample actress.
+
+### Registration checklist for GoodAV
+
+Besides creating `backend/app/scrapers/goodav/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=goodav` or `source=goodav17`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks (`goodav17.com`; media CDN already covered via `ggjav.com` / `video-*.ggjav.com`)
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="goodav"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### GoodAV verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"http://goodav17.com/html/20818/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=http://goodav17.com/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=http://goodav17.com/type/%E7%84%A1%E7%A2%BC/1/&page=2&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=goodav"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=http://goodav17.com/html/20818/"
+```
