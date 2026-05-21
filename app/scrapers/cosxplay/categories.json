@@ -1,8 +1,8 @@
 [
   { "id": "home", "name": "Home", "url": "https://cosxplay.com/" },
-  { "id": "categories", "name": "Categories", "url": "https://cosxplay.com/categories/" },
-  { "id": "cosplay-girls", "name": "Cosplay Girls", "url": "https://cosxplay.com/11314-video-actors/" },
-  { "id": "tags", "name": "Tags", "url": "https://cosxplay.com/9-video-tags/" },
+  { "id": "new", "name": "New Videos", "url": "https://cosxplay.com/?filter=latest" },
+  { "id": "best", "name": "Best Videos", "url": "https://cosxplay.com/?filter=most-viewed" },
+  { "id": "longest", "name": "Longest Videos", "url": "https://cosxplay.com/?filter=longest" },
   { "id": "nier-automata", "name": "Nier Automata", "url": "https://cosxplay.com/7841-nier-automata/" },
   { "id": "ahegao", "name": "Ahegao", "url": "https://cosxplay.com/4063-ahegao/" },
   { "id": "anal", "name": "Anal", "url": "https://cosxplay.com/11104-anal/" },
