@@ -2783,7 +2783,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
 
 ## PornTrex (porntrex.com) Implementation Notes
 
-[PornTrex](https://www.porntrex.com/) is a KVS-script tube site (KT player) serving HD/4K catalog pages. Video pages use numeric IDs under `/video/{id}/{slug}/`. Streams are exposed via inline `video_url` / `video_alt_url*` keys and signed `/get_file/` MP4 endpoints (same pattern as blowjobs.pro / zeenite). Thumbnails are often on `statics.cdntrex.com`.
+[PornTrex](https://www.porntrex.com/) is a KVS-script tube site (KT player) serving HD/4K catalog pages. Video pages use numeric IDs under `/video/{id}/{slug}/`. **Embed player URLs** (`/embed/{id}`, iframe `src`) are first-class scrape targets and always expose an `format: "embed"` stream for WebView/iframe playback. Streams are exposed via inline `video_url` / `video_alt_url*` keys and signed `/get_file/` MP4 endpoints (same pattern as blowjobs.pro / zeenite). Thumbnails are often on `statics.cdntrex.com`.
 
 ### Host aliases
 
@@ -2813,7 +2813,10 @@ curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
 - **Primary streams:** KT player `video_url` / `video_alt_url*` in page HTML (strip `function/0/` prefix when present) → `/get_file/4/{token}/{folder}/{id}/{file}.mp4/`
 - **Redirect resolution:** follow `/get_file/` with `Referer` + `age_pass=1` cookie to obtain CDN `Location` (optional; unresolved URLs remain playable with Referer)
 - **Qualities:** parse `360p`, `480p`, `720p`, `1080p`, `2160p` from filenames (`1751385_720p.mp4`, etc.)
-- Embed fallback: `https://www.porntrex.com/embed/{id}/`
+- Canonical watch URL: `https://www.porntrex.com/video/{id}/{slug}/`
+- Embed player URL: `https://www.porntrex.com/embed/{id}` (iframe `src`, e.g. `https://www.porntrex.com/embed/3002185`)
+- Scrape embed URLs directly: fetch embed HTML for KT streams; fetch canonical `/video/{id}/…` for title/thumbnail when needed
+- Always include `format: "embed"` stream; default to embed when no direct MP4/HLS resolved
 
 ### Categories (`get_categories`)
 
@@ -2856,4 +2859,8 @@ curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://www.porntrex.com/late
 curl "http://127.0.0.1:8000/api/v1/categories?source=porntrex"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://www.porntrex.com/video/1751385/african-women"
+
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://www.porntrex.com/embed/3002185\"}"
 ```

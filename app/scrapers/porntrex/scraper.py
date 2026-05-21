@@ -36,6 +36,8 @@ _VIDEO_PATH_INLINE_RE = re.compile(
     r"(?:https?://(?:www\.)?porntrex\.com)?/video/(\d+)(?:/([\w\-]+))?/?",
     re.IGNORECASE,
 )
+_EMBED_PATH_RE = re.compile(r"^/embed/(\d+)/?$", re.IGNORECASE)
+_VIDEO_ID_RE = re.compile(r"/(?:video|embed)/(\d+)", re.IGNORECASE)
 _KT_URL_KEYS = r"(?:video_url|video_url_text|video_alt_url|video_alt_url2)"
 _KT_PATTERNS = [
     rf"{_KT_URL_KEYS}\s*[:=]\s*'([^']+)'",
@@ -494,8 +496,18 @@ def _parse_list_items(soup: BeautifulSoup, *, limit: int, html: str = "") -> lis
 
 
 def _extract_video_id(url: str) -> Optional[str]:
-    m = re.search(r"/video/(\d+)/", url or "", flags=re.IGNORECASE)
+    m = _VIDEO_ID_RE.search(url or "")
     return m.group(1) if m else None
+
+
+def _embed_player_url(video_id: str) -> str:
+    return f"https://www.porntrex.com/embed/{video_id}"
+
+
+def _is_embed_page_url(url: str) -> bool:
+    path = (urlparse(url or "").path or "").lower().strip("/")
+    parts = [p for p in path.split("/") if p]
+    return len(parts) >= 2 and parts[0] == "embed" and parts[1].isdigit()
 
 
 def _canonical_video_url(video_id: str, slug: str | None = None) -> str:
@@ -530,6 +542,41 @@ def _normalize_video_href(href: str) -> Optional[str]:
     vid = m.group(1)
     slug = (m.group(2) or "").strip() or None
     return _canonical_video_url(vid, slug)
+
+
+def _find_canonical_video_page_url(
+    soup: BeautifulSoup, html: str, video_id: str
+) -> Optional[str]:
+    for sel in (
+        ("link", {"rel": "canonical"}),
+        ("meta", {"property": "og:url"}),
+    ):
+        tag = soup.find(sel[0], attrs=sel[1])
+        if tag:
+            href = tag.get("href") or tag.get("content")
+            if href:
+                canon = _normalize_video_href(str(href))
+                if canon:
+                    return canon
+
+    m = re.search(
+        rf"https?://(?:www\.)?porntrex\.com/video/{re.escape(video_id)}(?:/[\w\-]+)?/?",
+        html,
+        re.IGNORECASE,
+    )
+    if m:
+        return _normalize_video_href(m.group(0))
+    return _canonical_video_url(video_id)
+
+
+def _ensure_embed_stream(video_data: dict[str, Any], video_id: str) -> None:
+    embed_url = _embed_player_url(video_id)
+    streams = video_data.setdefault("streams", [])
+    if not any((s.get("format") == "embed" and embed_url in (s.get("url") or "")) for s in streams):
+        streams.append({"url": embed_url, "quality": "embed", "format": "embed"})
+    if not video_data.get("has_video"):
+        video_data["has_video"] = True
+        video_data["default"] = embed_url
 
 
 def _resolve_kt_url(raw: str, page_url: str) -> str:
@@ -660,15 +707,15 @@ def _stream_quality_from_url(url: str, *, label: str | None = None) -> str:
 
 def _extract_native_embed_url(html: str, video_url: str) -> Optional[str]:
     m = re.search(
-        r"https?://(?:www\.)?porntrex\.com/embed/\d+\b",
+        r"https?://(?:www\.)?porntrex\.com/embed/(\d+)/?",
         html,
         flags=re.IGNORECASE,
     )
     if m:
-        return m.group(0).strip().rstrip("/") + "/"
+        return _embed_player_url(m.group(1))
     vid = _extract_video_id(video_url)
     if vid:
-        return f"https://www.porntrex.com/embed/{vid}/"
+        return _embed_player_url(vid)
     return None
 
 
@@ -966,9 +1013,23 @@ def _extract_watch_duration(soup: BeautifulSoup, html: str) -> Optional[str]:
     return None
 
 
-def parse_video_page(html: str, url: str) -> dict[str, Any]:
+def parse_video_page(
+    html: str,
+    url: str,
+    *,
+    response_url: str | None = None,
+    video: dict[str, Any] | None = None,
+    page_url: str | None = None,
+) -> dict[str, Any]:
     soup = BeautifulSoup(html, "lxml")
-    canon = _normalize_video_href(url) or url
+    if response_url:
+        canon = response_url
+    elif _is_embed_page_url(url):
+        vid = _extract_video_id(url)
+        canon = _embed_player_url(vid) if vid else url
+    else:
+        canon = _normalize_video_href(url) or url
+    stream_base = page_url or canon
     ld = _parse_json_ld_video(soup)
 
     h1 = soup.select_one("h1, .video-title, .title-holder h1")
@@ -1035,20 +1096,90 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
             _meta(soup, prop="article:published_time"),
             _meta(soup, prop="article:modified_time"),
         ),
-        "video": _extract_streams(soup, html, canon),
+        "video": video
+        or {
+            k: v
+            for k, v in _extract_streams(soup, html, stream_base).items()
+            if k in ("streams", "hls", "default", "has_video")
+        },
         "related_videos": [],
         "preview_url": None,
     }
 
 
 async def scrape(url: str) -> dict[str, Any]:
-    canon = _normalize_video_href(url)
-    if not canon:
+    video_id = _extract_video_id(url)
+    if not video_id:
         raise ValueError(f"Unsupported PornTrex URL: {url}")
 
-    html = await fetch_page(canon, referer=canon)
-    data = parse_video_page(html, canon)
-    await _resolve_video_streams_to_remote_playable(data.get("video", {}), referer=canon)
+    is_embed = _is_embed_page_url(url)
+    response_url = (
+        _embed_player_url(video_id)
+        if is_embed
+        else (_normalize_video_href(url) or _canonical_video_url(video_id))
+    )
+    fetch_url = _embed_player_url(video_id) if is_embed else response_url
+
+    html = ""
+    try:
+        html = await fetch_page(fetch_url, referer=response_url)
+    except Exception:
+        pass
+
+    empty_video: dict[str, Any] = {
+        "streams": [],
+        "hls": None,
+        "default": None,
+        "has_video": False,
+    }
+    video_data = (
+        _extract_streams(BeautifulSoup(html, "lxml"), html, fetch_url)
+        if html
+        else dict(empty_video)
+    )
+
+    meta_html = html
+    if is_embed or not video_data.get("has_video"):
+        canon_url = _canonical_video_url(video_id)
+        if html:
+            found = _find_canonical_video_page_url(
+                BeautifulSoup(html, "lxml"), html, video_id
+            )
+            if found:
+                canon_url = found
+        if canon_url != fetch_url:
+            try:
+                full_html = await fetch_page(canon_url, referer=response_url)
+                if not video_data.get("has_video"):
+                    video_data = _extract_streams(
+                        BeautifulSoup(full_html, "lxml"), full_html, canon_url
+                    )
+                if is_embed or not _meta(BeautifulSoup(html, "lxml"), prop="og:title"):
+                    meta_html = full_html
+            except Exception:
+                pass
+
+    _ensure_embed_stream(video_data, video_id)
+
+    if is_embed:
+        direct = [
+            s
+            for s in video_data.get("streams", [])
+            if s.get("format") in ("mp4", "hls")
+        ]
+        if not direct:
+            video_data["default"] = _embed_player_url(video_id)
+
+    data = parse_video_page(
+        meta_html or "",
+        url,
+        response_url=response_url,
+        video=video_data,
+        page_url=fetch_url,
+    )
+    await _resolve_video_streams_to_remote_playable(
+        data.get("video", {}), referer=response_url
+    )
     return data
 
 
