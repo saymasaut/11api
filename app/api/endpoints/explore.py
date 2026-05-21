@@ -560,7 +560,7 @@ EXPLORE_SOURCES = [
         pageSize=32,
     ),
     ExploreSourceResponse(
-        baseUrl="https://www.porntrex.com/",
+        baseUrl="https://www.porntrex.com/latest-updates/",
         nickname="PornTrex",
         favicon="https://www.porntrex.com/favicon.ico",
         accentColor="#6A1B9A",
