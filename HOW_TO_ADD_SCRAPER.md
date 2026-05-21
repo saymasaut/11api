@@ -2098,3 +2098,74 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=memojav"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://memojav.com/video/START-579"
 ```
+
+## HoHoJ Implementation Notes
+
+[HoHoJ](https://hohoj.tv/) (好好J) is a JAV catalog site in the GGJAV family (CDN thumbnails on `cdn-*.ggjav.com`, streams on `video-*.ggjav.com`). Video pages use numeric IDs: `/video?id={ID}` (not slug paths). The detail page embeds `/embed?id={ID}`, which exposes the HLS master URL in `<video src="...index.m3u8">` and `var videoSrc = "..."`.
+
+### Host aliases
+
+- `hohoj.tv`
+- `www.hohoj.tv`
+
+### Listing and pagination (`list_videos`)
+
+- Home: `https://hohoj.tv/`
+- Browse by type (query param `type`):
+  - All: `https://hohoj.tv/search?type=all&p=1`
+  - Censored: `https://hohoj.tv/search?type=censored&p=1`
+  - Chinese subtitles: `https://hohoj.tv/search?type=chinese&p=1`
+  - Uncensored: `https://hohoj.tv/search?type=uncensored&p=1`
+  - Western: `https://hohoj.tv/search?type=europe&p=1`
+- Sort order (optional `order`): `popular` (default), `latest`, `views`, `likes`
+- Text search: `https://hohoj.tv/search?text={query}&p=1`
+- Actresses index: `https://hohoj.tv/all_models`
+- Parse cards in `div.video-item`; links are rendered as `{% if href="/video?id=123" %}` — extract with regex `/video?id=\d+`
+- Pagination: set/replace query param `p` (page 2 → `p=2`)
+
+### Metadata and streams (`scrape`)
+
+- Metadata: `og:*`, `h5.mt-3`, `.info` (views/date), `.model` (actress), `.ctg a` (tags)
+- Streams: fetch `https://hohoj.tv/embed?id={ID}`; read HLS from `#my-video[src]` or `videoSrc` in inline script
+- Always include embed fallback: `https://hohoj.tv/embed?id={ID}`
+
+### Categories (`get_categories`)
+
+Seed from nav/browse: Home, All, Censored, Chinese Subtitles, Uncensored, Western, Actresses.
+
+### Registration checklist for HoHoJ
+
+Besides creating `backend/app/scrapers/hohoj/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=hohoj` or `source=hohojtv`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `hohoj.tv` and `ggjav.com` (CDN)
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="hohoj"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### HoHoJ verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://hohoj.tv/video?id=51730\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://hohoj.tv/search?type=all&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=hohoj"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://hohoj.tv/video?id=51730"
+```

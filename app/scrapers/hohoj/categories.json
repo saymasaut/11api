@@ -1,0 +1,8 @@
+[
+  { "id": "home", "name": "Home", "url": "https://hohoj.tv/" },
+  { "id": "all", "name": "All", "url": "https://hohoj.tv/search?type=all" },
+  { "id": "censored", "name": "Censored", "url": "https://hohoj.tv/search?type=censored" },
+  { "id": "chinese", "name": "Chinese Subtitles", "url": "https://hohoj.tv/search?type=chinese" },
+  { "id": "uncensored", "name": "Uncensored", "url": "https://hohoj.tv/search?type=uncensored" },
+  { "id": "europe", "name": "Western", "url": "https://hohoj.tv/search?type=europe" }
+]
