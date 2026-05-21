@@ -355,7 +355,8 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
         "eporner.com" in parsed_url.netloc.lower() or
         "static.eporner.com" in parsed_url.netloc.lower() or
         "porntrex.com" in parsed_url.netloc.lower() or
-        "cdntrex.com" in parsed_url.netloc.lower()):
+        "cdntrex.com" in parsed_url.netloc.lower() or
+        "ptx.cdntrex.com" in parsed_url.netloc.lower()):
         qualities: dict[str, Any] = {}
         all_streams = video_data.get("streams", [])
         host_l = parsed_url.netloc.lower()
@@ -410,6 +411,7 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
             or "static.eporner.com" in host_l
             or "porntrex.com" in host_l
             or "cdntrex.com" in host_l
+            or "ptx.cdntrex.com" in host_l
         )
         
         # Debug logging for RedTube

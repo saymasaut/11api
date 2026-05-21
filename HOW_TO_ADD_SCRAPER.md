@@ -2798,7 +2798,12 @@ curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
 - Top rated: `https://www.porntrex.com/top-rated/`
 - Most viewed: `https://www.porntrex.com/most-viewed/`
 - Categories: `https://www.porntrex.com/category/{slug}/` (e.g. `amateur`, `4k-porn`, `teen`)
-- Parse cards via `a[href*='/video/']` → canonical `/video/{id}/{slug}/`
+- Parse cards in `div.video-item` (or `.video-item-title` parent blocks):
+  - Title: `.video-item-title`
+  - Duration: `.video-item-duration` / `.info.video-item-duration`
+  - Views: `.video-item-views` / `.info.video-item-views`
+  - Thumb: `.screenshot-item` (`ptx.cdntrex.com/.../videos_screenshots/...`, e.g. `300x168//6.jpg`)
+- Fallback: `a[href*='/video/']` → canonical `/video/{id}/{slug}/`
 - Pagination: append `/{page}/` to the list path for page &gt; 1 (e.g. `/latest/2/`); `?page=` is used when already present in the base URL
 
 ### Metadata and streams (`scrape`)

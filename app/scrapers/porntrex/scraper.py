@@ -130,16 +130,50 @@ def _extract_duration(text: str | None) -> Optional[str]:
 def _extract_views(text: str | None) -> Optional[str]:
     if not text:
         return None
+    raw = str(text).strip()
     m = re.search(
-        r"\bviews?\s*[:\-]?\s*(\d[\d\s,\.]*\s*[KMBkmb]?)\b",
-        text,
+        r"(\d[\d\s,\.]*)\s*views?\b",
+        raw,
         flags=re.IGNORECASE,
     )
-    if not m:
-        m = re.search(r"\b(\d[\d\s,\.]*\s*[KMBkmb])\b", text, flags=re.IGNORECASE)
+    if m:
+        return _normalize_numberish(m.group(1))
+    m = re.search(
+        r"\bviews?\s*[:\-]?\s*(\d[\d\s,\.]*\s*[KMBkmb]?)\b",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        return _normalize_numberish(m.group(1))
+    m = re.search(r"\b(\d[\d\s,\.]*\s*[KMBkmb])\b", raw, flags=re.IGNORECASE)
+    if m:
+        return _normalize_numberish(m.group(1))
+    m = re.search(r"(\d[\d\s,\.]+)", raw)
+    if m:
+        return _normalize_numberish(m.group(1))
+    return None
+
+
+def _normalize_asset_url(url: str) -> Optional[str]:
+    url = (url or "").strip()
+    if not url or url.startswith("data:"):
+        return None
+    if url.startswith("//"):
+        return f"https:{url}"
+    if url.startswith("/"):
+        return urljoin(BASE_SITE, url)
+    if url.startswith("http"):
+        return url
+    return None
+
+
+def _url_from_style(style: str | None) -> Optional[str]:
+    if not style:
+        return None
+    m = re.search(r"url\(['\"]?(.*?)['\"]?\)", style, flags=re.IGNORECASE)
     if not m:
         return None
-    return _normalize_numberish(m.group(1))
+    return _normalize_asset_url(m.group(1))
 
 
 def _best_image_url(img: Any) -> Optional[str]:
@@ -154,12 +188,134 @@ def _best_image_url(img: Any) -> Optional[str]:
             continue
         if key == "srcset" and " " in url:
             url = url.split(" ", 1)[0].strip()
-        if url.startswith("//"):
-            return f"https:{url}"
-        if url.startswith("/"):
-            return urljoin(BASE_SITE, url)
-        return url
+        normalized = _normalize_asset_url(url)
+        if normalized:
+            return normalized
     return None
+
+
+def _thumbnail_from_screenshot_item(el: Any) -> Optional[str]:
+    """PornTrex cards use .screenshot-item (img or background on ptx.cdntrex.com)."""
+    if el is None:
+        return None
+
+    for attr in ("data-src", "data-original", "data-thumb", "src"):
+        normalized = _normalize_asset_url(str(el.get(attr) or ""))
+        if normalized and "videos_screenshots" in normalized.lower():
+            return normalized
+
+    from_style = _url_from_style(el.get("style"))
+    if from_style and "videos_screenshots" in from_style.lower():
+        return from_style
+
+    if getattr(el, "name", None) == "img":
+        return _best_image_url(el)
+
+    img = el.select_one("img.screenshot-item, img") if hasattr(el, "select_one") else None
+    if img:
+        thumb = _best_image_url(img)
+        if thumb:
+            return thumb
+
+    return None
+
+
+def _find_list_block(el: Any) -> Any:
+    for parent in el.parents:
+        classes = " ".join(parent.get("class") or []).lower()
+        if any(
+            token in classes
+            for token in ("video-item", "thumb-block", "thumb", "item-thumb", "video-thumb")
+        ):
+            return parent
+    return el.parent
+
+
+def _parse_list_items(soup: BeautifulSoup, *, limit: int) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    blocks: list[Any] = []
+    for sel in (
+        "div.video-item",
+        "div.thumb-block",
+        "div.thumb",
+        "li.video-item",
+        ".videos-list .item",
+        ".list-videos .item",
+    ):
+        blocks.extend(soup.select(sel))
+
+    if not blocks:
+        for title_el in soup.select(".video-item-title"):
+            blocks.append(_find_list_block(title_el))
+
+    for block in blocks:
+        if len(items) >= limit:
+            break
+
+        link = block.select_one("a[href*='/video/']") if hasattr(block, "select_one") else None
+        href = _normalize_video_href(link.get("href") or "") if link else None
+        if not href:
+            m = _VIDEO_HREF_RE.search(str(block))
+            if m:
+                href = _canonical_video_url(m.group(1), m.group(2))
+        if not href or href in seen:
+            continue
+        seen.add(href)
+
+        title_el = (
+            block.select_one(".video-item-title")
+            if hasattr(block, "select_one")
+            else None
+        )
+        title = _clean_list_title(
+            _first_non_empty(
+                title_el.get_text(" ", strip=True) if title_el else None,
+                link.get("title") if link else None,
+                link.get_text(" ", strip=True) if link else None,
+            )
+        ) or "Unknown Video"
+
+        screenshot_el = (
+            block.select_one(".screenshot-item, img.screenshot-item")
+            if hasattr(block, "select_one")
+            else None
+        )
+        thumb = _thumbnail_from_screenshot_item(screenshot_el)
+        if not thumb and link:
+            thumb = _thumbnail_from_screenshot_item(link.find("img")) or _best_image_url(
+                link.find("img")
+            )
+
+        dur_el = (
+            block.select_one(".video-item-duration, .info.video-item-duration")
+            if hasattr(block, "select_one")
+            else None
+        )
+        duration = _extract_duration(
+            dur_el.get_text(" ", strip=True) if dur_el else None
+        )
+
+        views_el = (
+            block.select_one(".video-item-views, .info.video-item-views")
+            if hasattr(block, "select_one")
+            else None
+        )
+        views = _extract_views(views_el.get_text(" ", strip=True) if views_el else None)
+
+        items.append(
+            {
+                "url": href,
+                "title": title,
+                "thumbnail_url": thumb,
+                "duration": duration,
+                "views": views,
+                "uploader_name": None,
+            }
+        )
+
+    return items[:limit]
 
 
 def _extract_video_id(url: str) -> Optional[str]:
@@ -688,74 +844,47 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
         return []
 
     soup = BeautifulSoup(html, "lxml")
-    items: list[dict[str, Any]] = []
+    items = _parse_list_items(soup, limit=limit)
+    if items:
+        return items
+
+    # Fallback when markup lacks video-item wrappers (older/alternate templates).
     seen: set[str] = set()
-
-    for vid, slug in _VIDEO_HREF_RE.findall(str(soup)):
-        if len(items) >= limit:
-            break
-        href = _canonical_video_url(vid, slug)
-        if href in seen:
-            continue
-        seen.add(href)
-        items.append(
-            {
-                "url": href,
-                "title": "Unknown Video",
-                "thumbnail_url": None,
-                "duration": None,
-                "views": None,
-                "uploader_name": None,
-            }
-        )
-
     for a in soup.select("a[href*='/video/']"):
         if len(items) >= limit:
             break
         href = _normalize_video_href(a.get("href") or "")
         if not href or href in seen:
             continue
-
-        container = a.find_parent(["article", "li", "div"]) or a
-        img = a.find("img") or (container.find("img") if container else None)
-        thumb = _best_image_url(img)
-
-        title = _clean_list_title(
-            _first_non_empty(
-                a.get("title"),
-                img.get("alt") if img else None,
-                a.get_text(" ", strip=True),
-            )
-        ) or "Unknown Video"
-
-        ctext = container.get_text(" ", strip=True) if container else ""
-        duration = _extract_duration(ctext)
-        views_el = container.select_one(".views") if container else None
-        views_text = views_el.get_text(" ", strip=True) if views_el else None
-        views = _extract_views(views_text) or _extract_views(ctext)
-
         seen.add(href)
-        for i, existing in enumerate(items):
-            if existing["url"] == href:
-                items[i] = {
-                    "url": href,
-                    "title": title,
-                    "thumbnail_url": thumb or existing.get("thumbnail_url"),
-                    "duration": duration or existing.get("duration"),
-                    "views": views or existing.get("views"),
-                    "uploader_name": None,
-                }
-                break
-        else:
-            items.append(
-                {
-                    "url": href,
-                    "title": title,
-                    "thumbnail_url": thumb,
-                    "duration": duration,
-                    "views": views,
-                    "uploader_name": None,
-                }
-            )
+        container = a.find_parent(["article", "li", "div"]) or a
+        screenshot_el = container.select_one(".screenshot-item, img.screenshot-item")
+        thumb = _thumbnail_from_screenshot_item(screenshot_el) or _best_image_url(
+            a.find("img") or container.find("img")
+        )
+        title_el = container.select_one(".video-item-title")
+        dur_el = container.select_one(".video-item-duration, .info.video-item-duration")
+        views_el = container.select_one(".video-item-views, .info.video-item-views")
+        items.append(
+            {
+                "url": href,
+                "title": _clean_list_title(
+                    _first_non_empty(
+                        title_el.get_text(" ", strip=True) if title_el else None,
+                        a.get("title"),
+                        a.get_text(" ", strip=True),
+                    )
+                )
+                or "Unknown Video",
+                "thumbnail_url": thumb,
+                "duration": _extract_duration(
+                    dur_el.get_text(" ", strip=True) if dur_el else None
+                ),
+                "views": _extract_views(
+                    views_el.get_text(" ", strip=True) if views_el else None
+                ),
+                "uploader_name": None,
+            }
+        )
 
     return items[:limit]
