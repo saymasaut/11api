@@ -1,5 +1,5 @@
 [
-  { "id": "home", "name": "Hot Videos", "url": "https://memojav.com/" },
   { "id": "best", "name": "Best Videos", "url": "https://memojav.com/best/" },
-  { "id": "new", "name": "New Videos", "url": "https://memojav.com/video/" }
+  { "id": "new", "name": "New Videos", "url": "https://memojav.com/video/" },
+  { "id": "home", "name": "Hot Videos", "url": "https://memojav.com/" }
 ]
