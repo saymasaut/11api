@@ -426,158 +426,249 @@ def parse_page(html: str, url: str) -> dict[str, Any]:
     }
 
 
+def _normalize_stream_url(url: Any) -> Optional[str]:
+    if url is None:
+        return None
+    text = str(url).strip().replace("\\/", "/")
+    return text or None
+
+
+def _is_playable_url(url: Any) -> bool:
+    """True for direct http(s) URLs; xHamster now ships encrypted hex tokens in JSON."""
+    text = _normalize_stream_url(url)
+    if not text:
+        return False
+    return text.startswith("http://") or text.startswith("https://")
+
+
+def _normalize_quality_label(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if not text or text.lower() in ("auto", "default"):
+        return "adaptive"
+    if text.isdigit():
+        return f"{text}p"
+    if "1080" in text:
+        return "1080p"
+    if "720" in text:
+        return "720p"
+    if "480" in text:
+        return "480p"
+    if "240" in text:
+        return "240p"
+    if "144" in text:
+        return "144p"
+    if "2160" in text or "4k" in text.lower():
+        return "2160p"
+    return text
+
+
+def _streams_from_hls_master(url: str) -> list[dict[str, Any]]:
+    """Build HLS stream entries from a master playlist URL (may list multiple renditions)."""
+    url = _normalize_stream_url(url) or url
+    streams: list[dict[str, Any]] = []
+    m = re.search(r"multi=([^/]+)/", url)
+    if m:
+        for part in m.group(1).split(","):
+            segments = [s for s in part.split(":") if s]
+            if not segments:
+                continue
+            qm = re.search(r"(\d+p)", segments[-1], re.IGNORECASE)
+            q_label = _normalize_quality_label(qm.group(1) if qm else segments[-1])
+            streams.append({"quality": q_label, "url": url, "format": "hls"})
+    if not streams:
+        streams.append({"quality": "adaptive", "url": url, "format": "hls"})
+    return streams
+
+
+def _append_stream(
+    streams: list[dict[str, Any]],
+    *,
+    url: Any,
+    quality: Any,
+    fmt: str,
+) -> None:
+    normalized = _normalize_stream_url(url)
+    if not _is_playable_url(normalized):
+        return
+    streams.append(
+        {
+            "quality": _normalize_quality_label(quality),
+            "url": normalized,
+            "format": fmt,
+        }
+    )
+
+
+def _extract_hls_from_sources(hls: Any) -> Optional[str]:
+    """Resolve a playable HLS URL from xplayer sources (shape varies by page version)."""
+    if isinstance(hls, str):
+        return _normalize_stream_url(hls) if _is_playable_url(hls) else None
+    if not isinstance(hls, dict):
+        return None
+    if _is_playable_url(hls.get("url")):
+        return _normalize_stream_url(hls.get("url"))
+    # New layout: {"av1": {"url": "<hex>"}, "h264": {"url": "<hex>", "fallback": "..."}}
+    for entry in hls.values():
+        if isinstance(entry, str) and _is_playable_url(entry):
+            return _normalize_stream_url(entry)
+        if isinstance(entry, dict) and _is_playable_url(entry.get("url")):
+            return _normalize_stream_url(entry.get("url"))
+    return None
+
+
+def _extract_standard_streams(standard: Any) -> list[dict[str, Any]]:
+    """Extract MP4/HLS entries from `sources.standard` (legacy resolution keys or codec lists)."""
+    out: list[dict[str, Any]] = []
+    if not isinstance(standard, dict):
+        return out
+
+    resolution_keys = ("240", "480", "720", "1080", "144", "2160", "4k")
+    for key, items in standard.items():
+        key_l = str(key).lower()
+        # Codec buckets (av1/h264) hold encrypted tokens — iterate list items instead.
+        if key_l in ("av1", "h264", "vp9", "hevc"):
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                url = item.get("url")
+                q = item.get("quality") or item.get("label") or key
+                fmt = "hls" if ".m3u8" in str(url or "") else "mp4"
+                _append_stream(out, url=url, quality=q, fmt=fmt)
+            continue
+
+        url_to_add: Optional[str] = None
+        quality_label = key
+        if isinstance(items, str):
+            url_to_add = items
+        elif isinstance(items, list) and items:
+            first = items[0]
+            if isinstance(first, str):
+                url_to_add = first
+            elif isinstance(first, dict):
+                url_to_add = first.get("url")
+                quality_label = first.get("quality") or first.get("label") or key
+        elif isinstance(items, dict):
+            url_to_add = items.get("url")
+            quality_label = items.get("quality") or items.get("label") or key
+
+        if not url_to_add:
+            continue
+        if any(res in key_l for res in resolution_keys):
+            quality_label = key
+        fmt = "hls" if ".m3u8" in str(url_to_add) else "mp4"
+        _append_stream(out, url=url_to_add, quality=quality_label, fmt=fmt)
+    return out
+
+
+def _find_hls_in_html(html: str) -> Optional[str]:
+    for pattern in (
+        r"https://video-cf\.xhcdn\.com[^\"'\s]+\.m3u8",
+        r'["\'](https:[^"\']+\.m3u8[^"\']*)["\']',
+    ):
+        m = re.search(pattern, html)
+        if m:
+            candidate = m.group(1) if m.lastindex else m.group(0)
+            if _is_playable_url(candidate):
+                return _normalize_stream_url(candidate)
+    return None
+
+
 def _extract_video_data(html: str) -> dict[str, Any]:
     """
-    Extract video streams from xHamster's window.initials JSON
+    Extract video streams from xHamster's window.initials JSON and page markup.
     """
-    streams = []
-    hls_url = None
-    
+    streams: list[dict[str, Any]] = []
+    hls_url: Optional[str] = None
+
     try:
         data = _extract_initials_data(html)
         if data:
-            
-            # Navigate to video model
-            # Structure usually: xplayerSettings -> sources -> standard / hls
-            # Or: videoModel -> sources
-            
             sources = None
-            
-            # Try xplayerSettings
+
             xplayer = data.get("xplayerSettings")
-            if xplayer and isinstance(xplayer, dict):
+            if isinstance(xplayer, dict):
                 sources = xplayer.get("sources")
-                
-            # Try videoModel if xplayer not found
+
             if not sources:
                 video_model = data.get("videoModel")
-                if video_model and isinstance(video_model, dict):
+                if isinstance(video_model, dict):
                     sources = video_model.get("sources")
-            
-            if sources:
-                # Extract HLS
-                hls = sources.get("hls")
-                if hls:
-                     # hls can be string or object
-                    if isinstance(hls, str):
-                         hls_url = hls
-                    elif isinstance(hls, dict) and "url" in hls:
-                         hls_url = hls["url"]
-                    
-                    # Add HLS to streams array with proper format label
-                    if hls_url:
-                        streams.append({
-                            "quality": "adaptive",
-                            "url": hls_url,
-                            "format": "hls"
-                        })
 
-                # Extract MP4 (standard - dict format)
-                standard = sources.get("standard")
-                if standard and isinstance(standard, dict):
-                    # xHamster often provides: 240p, 480p, 720p, 1080p
-                    for quality, items in standard.items():
-                        # items is usually a list of urls or a single object
-                        # often just key=quality, value=url or list
-                        url_to_add = None
-                        if isinstance(items, str):
-                            url_to_add = items
-                        elif isinstance(items, list) and len(items) > 0:
-                            # Usually list of dicts or strings
-                            first = items[0]
-                            if isinstance(first, str):
-                                url_to_add = first
-                            elif isinstance(first, dict):
-                                url_to_add = first.get("url")
-                                
-                        if url_to_add:
-                            # Map quality names to simpler ones
-                            q_label = quality
-                            if "1080" in quality: q_label = "1080p"
-                            elif "720" in quality: q_label = "720p"
-                            elif "480" in quality: q_label = "480p"
-                            elif "240" in quality: q_label = "240p"
-                            
-                            streams.append({
-                                "quality": q_label,
-                                "url": url_to_add,
-                                "format": "mp4"
-                            })
+            if isinstance(sources, dict):
+                hls_url = _extract_hls_from_sources(sources.get("hls"))
+                if hls_url:
+                    streams.extend(_streams_from_hls_master(hls_url))
 
-                # Extract MP4 (h264/mp4 - list format)
-                # Some videos use 'h264' (list of dicts) instead of 'standard'
-                mp4_list = sources.get("h264") or sources.get("mp4")
-                if mp4_list and isinstance(mp4_list, list):
-                     for item in mp4_list:
-                         if isinstance(item, dict) and "url" in item:
-                             # Extract quality
-                             raw_q = str(item.get("quality", "default") or "default")
-                             q_label = raw_q
-                             
-                             if "1080" in raw_q: q_label = "1080p"
-                             elif "720" in raw_q: q_label = "720p"
-                             elif "480" in raw_q: q_label = "480p"
-                             elif "240" in raw_q: q_label = "240p"
-                             
-                             fmt = "mp4"
-                             if ".m3u8" in str(item["url"]):
-                                 fmt = "hls"
-                             
-                             streams.append({
-                                "quality": q_label,
-                                "url": item["url"],
-                                "format": fmt
-                             })
+                streams.extend(_extract_standard_streams(sources.get("standard")))
+
+                for list_key in ("h264", "mp4"):
+                    mp4_list = sources.get(list_key)
+                    if not isinstance(mp4_list, list):
+                        continue
+                    for item in mp4_list:
+                        if not isinstance(item, dict):
+                            continue
+                        url = item.get("url")
+                        raw_q = item.get("quality") or item.get("label") or "default"
+                        fmt = "hls" if ".m3u8" in str(url or "") else "mp4"
+                        _append_stream(streams, url=url, quality=raw_q, fmt=fmt)
 
     except Exception:
         pass
-        
-    # Fallback: Regex extraction for HLS if not found in JSON
-    # This matches the effective logic from debug scripts
-    if not hls_url:
-        m = re.search(r'["\'](https:[^"\']+\.m3u8[^"\']*)["\']', html)
-        if m:
-            hls_url = m.group(1).replace("\\/", "/")
-            # Add HLS to streams if extracted via fallback
-            streams.append({
-                "quality": "adaptive",
-                "url": hls_url,
-                "format": "hls"
-            })
-        
-    # Sort streams by quality (descending)
-    def quality_score(s):
-        q = s["quality"]
-        if "1080" in q: return 1080
-        if "720" in q: return 720
-        if "480" in q: return 480
-        if "240" in q: return 240
-        return 0
-        
-    # Keep both HLS and MP4; some pages expose MP4 only.
-    streams = [s for s in streams if s.get("format") in ("hls", "mp4")]
 
-    # Deduplicate streams based on URL
-    unique_urls = set()
-    unique_streams = []
+    if not hls_url:
+        hls_url = _find_hls_in_html(html)
+        if hls_url:
+            streams.extend(_streams_from_hls_master(hls_url))
+
+    streams = [s for s in streams if s.get("format") in ("hls", "mp4") and _is_playable_url(s.get("url"))]
+
+    seen: set[tuple[str, str, str]] = set()
+    unique_streams: list[dict[str, Any]] = []
     for s in streams:
-        if s["url"] not in unique_urls:
-            unique_urls.add(s["url"])
-            unique_streams.append(s)
+        key = (s.get("url", ""), s.get("quality", ""), s.get("format", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_streams.append(s)
     streams = unique_streams
 
+    def quality_score(s: dict[str, Any]) -> int:
+        q = str(s.get("quality", ""))
+        if "2160" in q or "4k" in q.lower():
+            score = 2160
+        elif "1080" in q:
+            score = 1080
+        elif "720" in q:
+            score = 720
+        elif "480" in q:
+            score = 480
+        elif "240" in q:
+            score = 240
+        elif "144" in q:
+            score = 144
+        elif q == "adaptive":
+            score = 720
+        else:
+            score = 0
+        if s.get("format") == "hls":
+            score += 1
+        return score
+
     streams.sort(key=quality_score, reverse=True)
-    
-    default_url = None
+
+    default_url: Optional[str] = None
     if streams:
         default_url = streams[0]["url"]
     elif hls_url:
         default_url = hls_url
-        
+
     return {
         "streams": streams,
         "default": default_url,
-        "has_video": len(streams) > 0 or hls_url is not None
+        "has_video": bool(streams) or hls_url is not None,
     }
 
 
