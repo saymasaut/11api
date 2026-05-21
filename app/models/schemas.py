@@ -92,6 +92,8 @@ class ScrapeRequest(BaseModel):
             "hohoj.tv",
             "ggjav.com",
             "ggjav.tv",
+            "porn87.com",
+            "porn87.tv",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v
@@ -177,6 +179,8 @@ class ListRequest(BaseModel):
             "hohoj.tv",
             "ggjav.com",
             "ggjav.tv",
+            "porn87.com",
+            "porn87.tv",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v

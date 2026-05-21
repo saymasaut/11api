@@ -2242,3 +2242,71 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=ggjav"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://ggjav.com/main/video?id=256833"
 ```
+
+## Porn87 Implementation Notes
+
+[Porn87](https://porn87.com/) is a user-upload JAV/homemade catalog (GGJAV-family CDN: `cdn-*.porn87.com`, HLS on `cdn-*.porn87.com/media/video_*`). Video pages use `/main/html?id={ID}` (not `/main/video`). The player lives at `/main/embed?id={ID}` with direct HLS in `<video src="...index.m3u8">` / `videoSrc`.
+
+### Host aliases
+
+- `porn87.com`
+- `www.porn87.com`
+- `porn87.tv` (mirror)
+
+### Listing and pagination (`list_videos`)
+
+- Home: `https://porn87.com/`
+- Latest: `https://porn87.com/main/tag?lineup=create_time`
+- Popular: `https://porn87.com/main/tag?lineup=recent_views`
+- Tag browse: `https://porn87.com/main/tag?name={tag}` (e.g. `高清日本AV`, `中港台`)
+- Text search: `https://porn87.com/main/search?name={query}`
+- Parse cards in `div.chunk > a[href*="/main/html?id="]`; thumb `img.video_thumbnail`, duration `.video_time`, views/likes via `fi-eye` / `fi-heart`
+- Pagination: query param `page` is **zero-based** in URLs (UI page 2 → `page=1`; API `page=1` omits the param)
+
+### Metadata and streams (`scrape`)
+
+- Metadata: `og:*`, title spans, `.video_time`, tag links (`/main/tag?name=`), optional model links
+- Streams: fetch `https://porn87.com/main/embed?id={ID}` → read HLS from `#my-video[src]` or `var videoSrc`
+- Optional multi-server map on the HTML page: same `var l = "{base64}"` decode as GGJAV (`b64` then subtract `0x58` per byte) for external embed fallbacks
+- Embed fallback: `https://porn87.com/main/embed?id={ID}`
+
+### Categories (`get_categories`)
+
+Seed from nav: Home, Latest, Popular, HD Japanese AV, Asian Homemade (中港台), All Tags, Actresses.
+
+### Registration checklist for Porn87
+
+Besides creating `backend/app/scrapers/porn87/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=porn87` or `source=porn87tv`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `porn87.com`, `porn87.tv`, and `cdn-*.porn87.com`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="porn87"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### Porn87 verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://porn87.com/main/html?id=5952\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://porn87.com/main/tag?lineup=create_time&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=porn87"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://porn87.com/main/html?id=5952"
+```
