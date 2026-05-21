@@ -251,6 +251,28 @@ def _quality_from_mp4_url(url: str) -> str:
     return "source"
 
 
+def _nosofiles_has_verify(url: str) -> bool:
+    return "verify=" in (urlparse(url).query or "").lower() or "verify=" in (url or "").lower()
+
+
+def _is_playable_nosofiles_mp4(url: str) -> bool:
+    """CDN requires per-request `?verify=` token; bare `_high.mp4` paths 403."""
+    if "nosofiles.com" not in (url or "").lower():
+        return True
+    return _nosofiles_has_verify(url)
+
+
+def _prefer_nosofiles_url(candidate: str, current: str) -> bool:
+    """Replace stored stream when candidate is a signed URL and current is not."""
+    if not _is_playable_nosofiles_mp4(current) and _is_playable_nosofiles_mp4(candidate):
+        return True
+    if _nosofiles_has_verify(candidate) and not _nosofiles_has_verify(current):
+        return True
+    if _nosofiles_has_verify(candidate) and _nosofiles_has_verify(current):
+        return len(candidate) > len(current)
+    return False
+
+
 def _parse_json_ld_graph(soup: BeautifulSoup) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
@@ -273,25 +295,40 @@ def _parse_json_ld_graph(soup: BeautifulSoup) -> list[dict[str, Any]]:
 
 
 def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str, Any]:
-    streams: list[dict[str, str]] = []
-    seen_urls: set[str] = set()
-    seen_keys: set[str] = set()
+    stream_by_key: dict[str, dict[str, str]] = {}
     unescaped = html.replace("\\/", "/").replace("\\u0026", "&")
 
     def add_stream(url: str, *, quality: str, fmt: str) -> None:
         u = (url or "").strip()
-        if not u or u in seen_urls:
-            return
-        if _is_preview_asset(u):
+        if not u or _is_preview_asset(u):
             return
         if fmt == "mp4" and "nosofiles.com" not in u.lower():
             return
-        dedupe_key = f"{fmt}:{quality}:{urlparse(u).netloc.lower()}{urlparse(u).path.lower()}"
-        if dedupe_key in seen_keys:
+        if fmt == "mp4" and not _is_playable_nosofiles_mp4(u):
             return
-        seen_urls.add(u)
-        seen_keys.add(dedupe_key)
-        streams.append({"url": u, "quality": quality, "format": fmt})
+        dedupe_key = f"{fmt}:{quality}:{urlparse(u).netloc.lower()}{urlparse(u).path.lower()}"
+        entry = {"url": u, "quality": quality, "format": fmt}
+        existing = stream_by_key.get(dedupe_key)
+        if existing is None or _prefer_nosofiles_url(u, existing["url"]):
+            stream_by_key[dedupe_key] = entry
+
+    # Signed player URLs first (JSON-LD contentUrl is often unsigned and 403s).
+    for m in re.finditer(r'var\s+videoHigh\s*=\s*"([^"]+)"', unescaped):
+        add_stream(m.group(1), quality="high", fmt="mp4")
+    for m in re.finditer(r'videoLow\s*=\s*"([^"]+)"', unescaped):
+        add_stream(m.group(1), quality="low", fmt="mp4")
+    for node in soup.select("video source[src], video source[data-src], video[src]"):
+        src = _first_non_empty(node.get("src"), node.get("data-src"))
+        if not src:
+            continue
+        if src.startswith("//"):
+            src = f"https:{src}"
+        elif src.startswith("/"):
+            src = urljoin(page_url, src)
+        if src.startswith("http"):
+            add_stream(src, quality=_quality_from_mp4_url(src), fmt="mp4")
+    for m in _NOSO_MP4_RE.finditer(unescaped):
+        add_stream(m.group(0), quality=_quality_from_mp4_url(m.group(0)), fmt="mp4")
 
     for obj in _parse_json_ld_graph(soup):
         t = obj.get("@type")
@@ -305,23 +342,7 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
         if isinstance(embed, str) and embed.startswith("http"):
             add_stream(embed, quality="cosxplay", fmt="embed")
 
-    for node in soup.select("video source[src], video source[data-src], video[src]"):
-        src = _first_non_empty(node.get("src"), node.get("data-src"))
-        if not src:
-            continue
-        if src.startswith("//"):
-            src = f"https:{src}"
-        elif src.startswith("/"):
-            src = urljoin(page_url, src)
-        if src.startswith("http"):
-            add_stream(src, quality=_quality_from_mp4_url(src), fmt="mp4")
-
-    for m in re.finditer(r'var\s+videoHigh\s*=\s*"([^"]+)"', unescaped):
-        add_stream(m.group(1), quality="high", fmt="mp4")
-    for m in re.finditer(r'videoLow\s*=\s*"([^"]+)"', unescaped):
-        add_stream(m.group(1), quality="low", fmt="mp4")
-    for m in _NOSO_MP4_RE.finditer(unescaped):
-        add_stream(m.group(0), quality=_quality_from_mp4_url(m.group(0)), fmt="mp4")
+    streams = list(stream_by_key.values())
 
     def _score(item: dict[str, str]) -> tuple[int, int]:
         fmt = (item.get("format") or "").lower()
@@ -336,7 +357,7 @@ def _extract_streams(soup: BeautifulSoup, html: str, page_url: str) -> dict[str,
         return (2, int(digits) if digits else 0)
 
     streams.sort(key=_score, reverse=True)
-    mp4s = [s for s in streams if s.get("format") == "mp4"]
+    mp4s = [s for s in streams if s.get("format") == "mp4" and _is_playable_nosofiles_mp4(s.get("url") or "")]
     embed = next((s for s in streams if s.get("format") == "embed"), None)
     default_url = mp4s[0]["url"] if mp4s else (embed["url"] if embed else None)
     return {
