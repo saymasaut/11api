@@ -2169,3 +2169,76 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=hohoj"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://hohoj.tv/video?id=51730"
 ```
+
+## GGJAV Implementation Notes
+
+[GGJAV](https://ggjav.com/) is the flagship JAV catalog in the same CDN/player family as [HoHoJ](https://hohoj.tv/) (`cdn-*.ggjav.com`, `video-*.ggjav.com`). Video pages use `/main/video?id={ID}` (numeric catalog id). Streams are not on the bare `/main/embed?id={ID}` page; they come from a base64 player map embedded in the video page.
+
+### Host aliases
+
+- `ggjav.com`
+- `www.ggjav.com`
+- `ggjav.tv` (mirror)
+
+### Listing and pagination (`list_videos`)
+
+- Home: `https://ggjav.com/`
+- Section listings:
+  - Censored: `https://ggjav.com/main/censored`
+  - Uncensored: `https://ggjav.com/main/uncensored`
+  - Amateur: `https://ggjav.com/main/amateur`
+  - Chinese subtitles: `https://ggjav.com/main/chinese`
+  - Western: `https://ggjav.com/main/europe`
+  - Anime: `https://ggjav.com/main/cartoon`
+- Text search: `https://ggjav.com/main/search?string={query}`
+- Parse cards in `div.item` with `a[href*="/main/video?id="]`; title in `.item_title`, thumb `img.item_image`, views in `.item_views`
+- Pagination: query param `page` (site sometimes emits `&&page` — normalize to `&page`)
+
+### Metadata and streams (`scrape`)
+
+- Metadata: `og:*`, `.title_text`, `.info img`, `.ctg_button` / `.ctg a`, optional `.model .model_name`
+- Player map: `var l = "{base64}"` on the video page → decode (`b64` then subtract `0x58` per byte) → JSON object `links.{server}[]`
+- Preferred HLS path: `links.ggjav[0]` is `/main/embed?u={base64_mp4_path}&poster=...` → decode `u` → append `/index.m3u8` to the `.mp4` base URL (e.g. `https://video-6.ggjav.com/video_1/...mp4/index.m3u8`)
+- Alternate embed fallbacks: `mmfl04`, `mmsw02`, `embedrise`, `tapewithadblock`, etc. from the same `links` map
+- Embed fallback: `https://ggjav.com/main/embed?id={ID}`
+
+### Categories (`get_categories`)
+
+Seed from nav: Home, Censored, Uncensored, Amateur, Chinese Subtitles, Western, Anime, All Actresses, Uncensored Actresses.
+
+### Registration checklist for GGJAV
+
+Besides creating `backend/app/scrapers/ggjav/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=ggjav` or `source=ggjavtv`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `ggjav.com`, `ggjav.tv`, and `video-*.ggjav.com`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="ggjav"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### GGJAV verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://ggjav.com/main/video?id=256833\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://ggjav.com/main/uncensored&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=ggjav"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://ggjav.com/main/video?id=256833"
+```

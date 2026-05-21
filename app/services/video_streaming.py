@@ -24,7 +24,7 @@ async def get_video_info(url: str, api_base_url: str = "http://localhost:8000") 
         }
     """
     # Import here to avoid circular dependency
-    from app.scrapers import xnxx, xhamster, xvideos, masa49, pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rule34video, haho, hanime, rouvideo, cg51, oppai, xmoviesforyou, tnaflix, hornysimp, pimpbunny, hentaiser, bollywoodmaal, viralkand, blowjobspro, blackporn24, lesbianporn8, milfporn8, indianporn365, mmsbro, kamababa, desimms2, desiporn, thotsporn, leakedamateurporn, zeenite, uncutmaza, mydesimms, po85, cosxplay, memojav, hohoj
+    from app.scrapers import xnxx, xhamster, xvideos, masa49, pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rule34video, haho, hanime, rouvideo, cg51, oppai, xmoviesforyou, tnaflix, hornysimp, pimpbunny, hentaiser, bollywoodmaal, viralkand, blowjobspro, blackporn24, lesbianporn8, milfporn8, indianporn365, mmsbro, kamababa, desimms2, desiporn, thotsporn, leakedamateurporn, zeenite, uncutmaza, mydesimms, po85, cosxplay, memojav, hohoj, ggjav
     from app.api.endpoints import thumbnails
     from urllib.parse import urlparse
     
@@ -136,10 +136,12 @@ async def get_video_info(url: str, api_base_url: str = "http://localhost:8000") 
         scraper_module = memojav
     elif hohoj.can_handle(host):
         scraper_module = hohoj
+    elif ggjav.can_handle(host):
+        scraper_module = ggjav
     else:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported host: {host}. Supported: xnxx, xhamster, xvideos, masa49 (.org/.com/.cam), pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, urshort.live (embed), pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rou.video, 51cg/chigua, oppai.stream, xmoviesforyou.com, tnaflix.com, hornysimp.com, pimpbunny.com, hentaiser.app, bollywoodmaal.com, viralkand.com, blowjobs.pro, blackporn24.com, lesbianporn8.net, milfporn8.net, indianporn365.xyz, mmsbro.com, thekamababa.com, desimms2.site, desiporn.one, thotsporn.com, leakedamateurporn.xyz, zeenite.com, uncutmazaa.com (uncutmaza.com/.cc rewrite), mydesimms.watch, 85po.com, cosxplay.com, memojav.com, hohoj.tv"
+            detail=f"Unsupported host: {host}. Supported: xnxx, xhamster, xvideos, masa49 (.org/.com/.cam), pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, urshort.live (embed), pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rou.video, 51cg/chigua, oppai.stream, xmoviesforyou.com, tnaflix.com, hornysimp.com, pimpbunny.com, hentaiser.app, bollywoodmaal.com, viralkand.com, blowjobs.pro, blackporn24.com, lesbianporn8.net, milfporn8.net, indianporn365.xyz, mmsbro.com, thekamababa.com, desimms2.site, desiporn.one, thotsporn.com, leakedamateurporn.xyz, zeenite.com, uncutmazaa.com (uncutmaza.com/.cc rewrite), mydesimms.watch, 85po.com, cosxplay.com, memojav.com, hohoj.tv, ggjav.com"
         )
     
     try:
@@ -314,7 +316,8 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
         "cosxplay.com" in parsed_url.netloc.lower() or
         "memojav.com" in parsed_url.netloc.lower() or
         "hohoj.tv" in parsed_url.netloc.lower() or
-        "ggjav.com" in parsed_url.netloc.lower()):
+        "ggjav.com" in parsed_url.netloc.lower() or
+        "ggjav.tv" in parsed_url.netloc.lower()):
         qualities: dict[str, Any] = {}
         all_streams = video_data.get("streams", [])
         host_l = parsed_url.netloc.lower()
@@ -346,6 +349,7 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
             or "memojav.com" in host_l
             or "hohoj.tv" in host_l
             or "ggjav.com" in host_l
+            or "ggjav.tv" in host_l
         )
         
         # Debug logging for RedTube
