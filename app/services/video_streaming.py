@@ -229,53 +229,49 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
     Returns:
         {"stream_url": "https://...mp4", "quality": "1080p", "format": "mp4"}
     """
-    from urllib.parse import urlparse
-
-    parsed_url = urlparse(url)
-
     # Note: get_video_info is async, so this needs to be awaited if called directly.
-    info = await get_video_info(url, api_base_url=api_base_url)
+    # But usually this is called by endpoint which calls get_video_info first.
+    # Refactoring: we'll just call get_video_info here too.
+    # Using default localhost for this low-level helper as it returns raw data
+    info = await get_video_info(url, api_base_url=api_base_url) 
     video_data = info["video"]
-    streams = video_data.get("streams", [])
-    matching: list[dict[str, Any]] = []
-
+    
     if quality == "default":
-        stream_url = video_data.get("default")
+        stream_url = video_data["default"]
         selected_quality = "default"
-
+        
+        # Try to find the quality metadata of the default stream
+        streams = video_data.get("streams", [])
         for s in streams:
             if s.get("url") == stream_url:
                 found_quality = s.get("quality", "default")
-                if found_quality and str(found_quality).isdigit():
+                # Normalize quality: add 'p' suffix if missing
+                if found_quality and found_quality.isdigit():
                     selected_quality = f"{found_quality}p"
                 else:
                     selected_quality = found_quality
                 break
     else:
-        def _quality_matches(stream_q: str, requested: str) -> bool:
-            if stream_q == requested:
-                return True
-            sq = str(stream_q or "").lower().replace("_hd", "").replace("_sd", "")
-            rq = str(requested or "").lower().replace("_hd", "").replace("_sd", "")
-            if sq == rq:
-                return True
-            sq_digits = "".join(c for c in sq if c.isdigit())
-            rq_digits = "".join(c for c in rq if c.isdigit())
-            return bool(sq_digits and sq_digits == rq_digits)
-
-        matching = [s for s in streams if _quality_matches(s.get("quality", ""), quality)]
-
+        # Find matching quality
+        streams = video_data["streams"]
+        matching = [s for s in streams if s["quality"] == quality]
+        
         if matching:
             stream_url = matching[0]["url"]
             selected_quality = matching[0]["quality"]
         else:
-            stream_url = video_data.get("default")
+            # Fallback to default
+            stream_url = video_data["default"]
             selected_quality = "default"
             logger.warning(f"Quality {quality} not available, using default")
-
+    
+    # Determine format and refine quality label
+    # First, check if the scraper provided a specific format
     fmt = "mp4"
-    selected_stream = matching[0] if matching else None
+    selected_stream = matching[0] if (quality != "default" and matching) else None
     if not selected_stream and quality == "default":
+        # Try to find the stream object for the default URL
+        streams = video_data.get("streams", [])
         for s in streams:
             if s.get("url") == stream_url:
                 selected_stream = s
@@ -286,16 +282,10 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
         # Preferred mirror is tagged "default" in some scrapers; playback is still embed/WebView.
         if str(fmt).lower() == "default":
             fmt = "embed"
-    elif stream_url and ".m3u8" in stream_url:
+    elif ".m3u8" in stream_url:
         fmt = "hls"
         if selected_quality == "default":
             selected_quality = "adaptive"
-
-    if not stream_url:
-        raise HTTPException(
-            status_code=404,
-            detail="No playable stream URL found for this video.",
-        )
 
     # Build base response
     response = {
@@ -303,11 +293,11 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
         "quality": selected_quality,
         "format": fmt,
     }
-    host_l = parsed_url.netloc.lower()
-    if "porntrex.com" in host_l:
-        response["referer"] = url
-
-    if ("pornhub.com" in host_l or 
+    
+    # Add available_qualities for Pornhub, YouPorn, and RedTube
+    from urllib.parse import urlparse
+    parsed_url = urlparse(url)
+    if ("pornhub.com" in parsed_url.netloc.lower() or 
         "youporn.com" in parsed_url.netloc.lower() or
         "redtube.com" in parsed_url.netloc.lower() or
         "redtube.net" in parsed_url.netloc.lower() or
@@ -366,10 +356,10 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
         "static.eporner.com" in parsed_url.netloc.lower() or
         "porntrex.com" in parsed_url.netloc.lower() or
         "cdntrex.com" in parsed_url.netloc.lower() or
-        "ptx.cdntrex.com" in parsed_url.netloc.lower() or
-        "statics.cdntrex.com" in parsed_url.netloc.lower()):
+        "ptx.cdntrex.com" in parsed_url.netloc.lower()):
         qualities: dict[str, Any] = {}
         all_streams = video_data.get("streams", [])
+        host_l = parsed_url.netloc.lower()
         per_stream_format_keys = (
             "xmoviesforyou.com" in host_l
             or "xxxparodyhd.net" in host_l
@@ -422,8 +412,6 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
             or "porntrex.com" in host_l
             or "cdntrex.com" in host_l
             or "ptx.cdntrex.com" in host_l
-            or "statics.cdntrex.com" in host_l
-            or host_l.endswith(".cdntrex.com")
         )
         
         # Debug logging for RedTube

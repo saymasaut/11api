@@ -2794,7 +2794,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
 ### Listing and pagination (`list_videos`)
 
 - Home: `https://www.porntrex.com/`
-- Latest: `https://www.porntrex.com/latest-updates/` (also accepts `/latest/` in some builds)
+- Latest: `https://www.porntrex.com/latest/`
 - Top rated: `https://www.porntrex.com/top-rated/`
 - Most viewed: `https://www.porntrex.com/most-viewed/`
 - Categories: `https://www.porntrex.com/category/{slug}/` (e.g. `amateur`, `4k-porn`, `teen`)
@@ -2814,7 +2814,6 @@ curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
 - **Redirect resolution:** follow `/get_file/` with `Referer` + `age_pass=1` cookie to obtain CDN `Location` (optional; unresolved URLs remain playable with Referer)
 - **Qualities:** parse `360p`, `480p`, `720p`, `1080p`, `2160p` from filenames (`1751385_720p.mp4`, etc.)
 - Embed fallback: `https://www.porntrex.com/embed/{id}/`
-- **Stream API (`/api/v1/videos/stream`):** `get_stream_url` must parse the URL with `urlparse` before reading `parsed_url.netloc` (e.g. when setting `referer` for PornTrex). Using `parsed_url` before assignment causes HTTP **500** (`UnboundLocalError`).
 
 ### Categories (`get_categories`)
 
@@ -2850,9 +2849,9 @@ curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
   -H "Content-Type: application/json" \
   -d "{\"url\":\"https://www.porntrex.com/video/1751385/african-women\"}"
 
-curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://www.porntrex.com/latest-updates/&page=1&limit=20"
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://www.porntrex.com/latest/&page=1&limit=20"
 
-curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://www.porntrex.com/latest-updates/2/&page=1&limit=20"
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://www.porntrex.com/latest/2/&page=1&limit=20"
 
 curl "http://127.0.0.1:8000/api/v1/categories?source=porntrex"
 
