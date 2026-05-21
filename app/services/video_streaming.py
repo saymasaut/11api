@@ -257,8 +257,6 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
     # But usually this is called by endpoint which calls get_video_info first.
     # Refactoring: we'll just call get_video_info here too.
     # Using default localhost for this low-level helper as it returns raw data
-    from urllib.parse import urlparse
-
     info = await get_video_info(url, api_base_url=api_base_url)
     video_data = info["video"]
     streams = video_data.get("streams", [])
@@ -270,19 +268,11 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
     if quality == "default":
         stream_url = video_data.get("default")
         selected_quality = "default"
-        host_l = urlparse(url).netloc.lower()
-        if "porntrex.com" in host_l:
-            source_stream = next((s for s in streams if s.get("quality") == "source"), None)
-            if source_stream:
-                selected_stream = source_stream
-                stream_url = source_stream.get("url")
-                selected_quality = "source"
-        if not selected_stream:
-            for s in streams:
-                if s.get("url") == stream_url:
-                    selected_stream = s
-                    selected_quality = _normalize_quality_label(s.get("quality", "default"))
-                    break
+        for s in streams:
+            if s.get("url") == stream_url:
+                selected_stream = s
+                selected_quality = _normalize_quality_label(s.get("quality", "default"))
+                break
     else:
         matching = [s for s in streams if _quality_labels_match(s.get("quality"), quality)]
         if matching:
@@ -327,6 +317,7 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
     }
     
     # Add available_qualities for Pornhub, YouPorn, and RedTube
+    from urllib.parse import urlparse
     parsed_url = urlparse(url)
     if ("pornhub.com" in parsed_url.netloc.lower() or 
         "youporn.com" in parsed_url.netloc.lower() or
