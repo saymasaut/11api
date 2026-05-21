@@ -301,12 +301,18 @@ def _build_list_page_url(base_url: str, page: int) -> str:
     scheme = p.scheme or "https"
     netloc = p.netloc or SITE_HOST
     path = p.path or "/"
-    if not path.endswith("/"):
-        path += "/"
-    path = re.sub(r"/page-\d+/?$", "/", path)
+    path = re.sub(r"/page-\d+/?$", "", path)
+    if path != "/" and path.endswith("/"):
+        path = path.rstrip("/")
     if page <= 1:
+        if path and path != "/":
+            path = path + "/"
+        else:
+            path = "/"
         return urlunparse((scheme, netloc, path, "", "", ""))
-    new_path = path.rstrip("/") + f"/page-{page}/"
+    # MemoJav returns 404 for trailing-slash page URLs (e.g. /video/page-2/).
+    base = "" if path in ("", "/") else path
+    new_path = f"{base}/page-{page}" if base else f"/page-{page}"
     return urlunparse((scheme, netloc, new_path, "", "", ""))
 
 

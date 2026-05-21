@@ -2035,7 +2035,7 @@ curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://cosxplay.com/78642-
 
 ## MemoJav Implementation Notes
 
-[MemoJav](https://memojav.com/) is a JAV catalog site. Canonical video pages use `/video/{CODE}` **without** a trailing slash (for example `/video/START-579` — `/video/START-579/` returns 404). Listings use `a.video-item` cards with `img.video-poster`; pagination is `page-{n}` under the current section path (for example `/video/page-2/`).
+[MemoJav](https://memojav.com/) is a JAV catalog site. Canonical video pages use `/video/{CODE}` **without** a trailing slash (for example `/video/START-579` — `/video/START-579/` returns 404). Listings use `a.video-item` cards with `img.video-poster`; pagination is `page-{n}` under the current section path without a trailing slash (for example `/video/page-2`).
 
 ### Host aliases
 
@@ -2047,7 +2047,7 @@ curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://cosxplay.com/78642-
 - Home: `https://memojav.com/`
 - Best: `https://memojav.com/best/`
 - New: `https://memojav.com/video/`
-- Page 2 on new videos: `https://memojav.com/video/page-2/`
+- Page 2 on new videos: `https://memojav.com/video/page-2` (no trailing slash — `/video/page-2/` is 404)
 - Parse `a.video-item[href]` → title from `.video-title`, thumb from `img.video-poster`
 
 ### Metadata and streams (`scrape`)
