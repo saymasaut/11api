@@ -2444,3 +2444,67 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=kanav"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://kanav.ad/index.php/vod/play/id/111060/sid/1/nid/1.html"
 ```
+
+## MissAV Implementation Notes
+
+[MissAV](https://missav.ai/) is a JAV catalog site. Video pages use a DVD-style slug (`fc2-ppv-1434674`, `ssni-123`, etc.) with optional locale prefix (`/en/`, `/ja/`, …). Thumbnails and previews are served from `fourhoi.com`; HLS playback uses obfuscated `surrit.com` URLs in an inline `eval(...)` player block.
+
+### Host aliases
+
+- `missav.ai`
+- `www.missav.ai`
+
+### Listing and pagination (`list_videos`)
+
+- Browse URLs use a rotating `dm{id}` prefix, e.g. `https://missav.ai/dm428/fc2`, `https://missav.ai/dm539/new`
+- Localized browse: `https://missav.ai/dm428/en/fc2`
+- Parse cards in `div.thumbnail` → `a[href]` to `https://missav.ai/{slug}` or `https://missav.ai/en/{slug}`; thumb `img[data-src]` (`fourhoi.com/{slug}/cover-t.jpg`), duration in `span.absolute.bottom-1.right-1`
+- Pagination: query param `page` (page 2 → `?page=2`). Preserve the full `dm{id}/…` path from `base_url` (the numeric `dm` segment can change between mirrors)
+
+### Metadata and streams (`scrape`)
+
+- Canonical page: `https://missav.ai/en/{dvd-slug}` (also accept `https://missav.ai/{dvd-slug}`)
+- Metadata: `og:title`, `og:image` (`fourhoi.com/{slug}/cover-n.jpg`), `og:video:duration` (seconds), `og:video:release_date`, `<h1>`, actress/genre links
+- Streams: locate `eval(function(p,a,c,k,e,d){...}('e=\'...\';c=\'...\';b=\'...\';',15,15,'m3u8|...|surrit|https|...'.split('|'),0,{}))` → decode digit placeholders against the split array; `d` in the template is the `dvdId` slug → master HLS is variable `e`, e.g. `https://surrit.com/{hash}/{dvd-slug}.m3u8`
+- `dvdId` is also exposed in Alpine `x-data` as `dvdId: 'fc2-ppv-1434674'`
+
+### Categories (`get_categories`)
+
+Seed from nav `dm*` links: New Releases, Recent Update, Uncensored Leak, Chinese Subtitle, FC2, hot lists, SIRO, LUXU, HEYZO, etc.
+
+### Registration checklist for MissAV
+
+Besides creating `backend/app/scrapers/missav/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=missav` or `source=missavai`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `missav.ai` and `surrit.com`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="missav"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### MissAV verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://missav.ai/en/fc2-ppv-1434674\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://missav.ai/dm428/fc2&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=missav"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://missav.ai/en/fc2-ppv-1434674"
+```

@@ -1,0 +1,481 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+from typing import Any, Optional
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+from bs4 import BeautifulSoup
+
+from app.core.pool import fetch_html as pool_fetch_html
+
+BASE_SITE = "https://missav.ai/"
+SITE_HOST = "missav.ai"
+SITE_ALIASES = frozenset({"missav.ai", "www.missav.ai"})
+
+_LOCALES = frozenset(
+    {
+        "en",
+        "cn",
+        "ja",
+        "ko",
+        "ms",
+        "th",
+        "de",
+        "fr",
+        "vi",
+        "id",
+        "fil",
+        "pt",
+        "zh",
+    }
+)
+_RESERVED_SLUGS = frozenset(
+    {
+        "new",
+        "release",
+        "dm",
+        "site",
+        "api",
+        "login",
+        "register",
+        "genres",
+        "makers",
+        "actresses",
+        "saved",
+        "search",
+        "vip",
+        "contact",
+        "terms",
+        "upload",
+    }
+)
+
+_VIDEO_PAGE_RE = re.compile(
+    r"^https?://(?:www\.)?missav\.ai/(?:(?P<locale>[a-z]{2}(?:-[a-z]+)?)/)?(?P<dvd>[a-z0-9][a-z0-9-]*)/?$",
+    re.IGNORECASE,
+)
+_VIDEO_HREF_RE = re.compile(
+    r"^https?://(?:www\.)?missav\.ai/(?:(?P<locale>[a-z]{2}(?:-[a-z]+)?)/)?(?P<dvd>[a-z0-9][a-z0-9-]*)/?$",
+    re.IGNORECASE,
+)
+_EVAL_BLOCK_RE = re.compile(
+    r"return p\}\('(.+?)',(\d+),(\d+),'([^']+)'\.split\('\|'\)",
+    re.DOTALL,
+)
+_TEMPLATE_RE = re.compile(r"([a-z])='([^']+)';")
+_M3U8_RE = re.compile(r"https?://[^\s\"'<>]+\.m3u8[^\s\"'<>]*", re.IGNORECASE)
+_DVD_ID_RE = re.compile(r"dvdId:\s*'([^']+)'", re.IGNORECASE)
+
+
+def can_handle(host: str) -> bool:
+    h = (host or "").lower().split(":")[0]
+    if h.startswith("www."):
+        h = h[4:]
+    return h in SITE_ALIASES or h.endswith(".missav.ai")
+
+
+def get_categories() -> list[dict]:
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        json_path = os.path.join(current_dir, "categories.json")
+        with open(json_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+async def fetch_page(url: str, *, referer: str | None = None) -> str:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": referer or BASE_SITE,
+    }
+    return await pool_fetch_html(url, headers=headers)
+
+
+def _first_non_empty(*values: Optional[str]) -> Optional[str]:
+    for v in values:
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    return None
+
+
+def _meta(soup: BeautifulSoup, *, prop: str | None = None, name: str | None = None) -> Optional[str]:
+    if prop:
+        tag = soup.find("meta", attrs={"property": prop})
+        if tag and tag.get("content"):
+            return str(tag.get("content")).strip()
+    if name:
+        tag = soup.find("meta", attrs={"name": name})
+        if tag and tag.get("content"):
+            return str(tag.get("content")).strip()
+    return None
+
+
+def _clean_title(title: str | None) -> Optional[str]:
+    if not title:
+        return None
+    t = str(title).strip()
+    for suffix in (" - MissAV", " | MissAV", " :: MissAV"):
+        if suffix in t:
+            t = t.split(suffix, 1)[0].strip()
+    return t or None
+
+
+def _format_duration_seconds(raw: str | None) -> Optional[str]:
+    if not raw:
+        return None
+    txt = str(raw).strip()
+    if txt.isdigit():
+        total = int(txt)
+        h, rem = divmod(total, 3600)
+        m, s = divmod(rem, 60)
+        if h > 0:
+            return f"{h}:{m:02d}:{s:02d}"
+        return f"{m}:{s:02d}"
+    m = re.search(r"\b(?:\d{1,2}:){1,2}\d{2}\b", txt)
+    return m.group(0) if m else None
+
+
+def _is_video_slug(slug: str) -> bool:
+    s = (slug or "").lower().strip("/")
+    if not s or s in _RESERVED_SLUGS:
+        return False
+    if s.startswith("dm") and s[2:].isdigit():
+        return False
+    if "/" in s:
+        return False
+    return bool(re.fullmatch(r"[a-z0-9][a-z0-9-]*", s)) and ("-" in s or any(c.isdigit() for c in s))
+
+
+def _extract_dvd_id(url: str) -> Optional[str]:
+    raw = (url or "").strip().split("#", 1)[0].split("?", 1)[0]
+    m = _VIDEO_PAGE_RE.match(raw if raw.endswith("/") else raw + "/")
+    if not m:
+        parsed = urlparse(raw)
+        host = (parsed.netloc or "").lower().replace("www.", "")
+        if host != SITE_HOST:
+            return None
+        parts = [p for p in (parsed.path or "").split("/") if p]
+        if not parts:
+            return None
+        if parts[0].lower() in _LOCALES and len(parts) >= 2:
+            slug = parts[1].lower()
+        elif parts[0].lower().startswith("dm") and parts[0][2:].isdigit():
+            return None
+        else:
+            slug = parts[0].lower()
+        return slug if _is_video_slug(slug) else None
+    locale = (m.group("locale") or "").lower()
+    dvd = (m.group("dvd") or "").lower()
+    if locale.split("-")[0] in _LOCALES or locale in _LOCALES:
+        return dvd if _is_video_slug(dvd) else None
+    if _is_video_slug(locale):
+        return locale
+    return dvd if _is_video_slug(dvd) else None
+
+
+def _canonical_video_url(dvd_id: str, *, locale: str = "en") -> str:
+    dvd = (dvd_id or "").lower().strip("/")
+    loc = (locale or "en").lower()
+    return f"https://{SITE_HOST}/{loc}/{dvd}"
+
+
+def _normalize_video_href(href: str) -> Optional[str]:
+    href = (href or "").strip()
+    if not href:
+        return None
+    if href.startswith("//"):
+        href = f"https:{href}"
+    elif href.startswith("/"):
+        href = f"{BASE_SITE.rstrip('/')}{href}"
+    m = _VIDEO_HREF_RE.match(href if href.endswith("/") else href + "/")
+    if not m:
+        parsed = urlparse(href)
+        if (parsed.netloc or "").lower().replace("www.", "") != SITE_HOST:
+            return None
+        parts = [p for p in (parsed.path or "").split("/") if p]
+        if parts and parts[0].lower() in _LOCALES and len(parts) >= 2:
+            slug = parts[1].lower()
+        elif parts:
+            slug = parts[-1].lower()
+        else:
+            return None
+        if not _is_video_slug(slug):
+            return None
+        return _canonical_video_url(slug)
+    dvd = (m.group("dvd") or "").lower()
+    if not _is_video_slug(dvd):
+        return None
+    loc = (m.group("locale") or "en").lower()
+    return _canonical_video_url(dvd, locale=loc.split("-")[0] if loc else "en")
+
+
+def _best_image_url(img: Any) -> Optional[str]:
+    if img is None:
+        return None
+    for key in ("data-src", "data-original", "src"):
+        v = img.get(key)
+        if not v or str(v).startswith("data:"):
+            continue
+        url = str(v).strip()
+        if url.startswith("//"):
+            return f"https:{url}"
+        return url
+    return None
+
+
+def _decode_template(tmpl: str, parts: list[str], *, dvd_id: str) -> str:
+    out: list[str] = []
+    i = 0
+    while i < len(tmpl):
+        ch = tmpl[i]
+        if ch.isdigit():
+            j = i
+            while j < len(tmpl) and tmpl[j].isdigit():
+                j += 1
+            idx = int(tmpl[i:j])
+            if 0 <= idx < len(parts):
+                out.append(parts[idx])
+            i = j
+        elif ch == "d":
+            out.append(dvd_id)
+            i += 1
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+def _streams_from_player(html: str, *, dvd_id: str) -> dict[str, Any]:
+    streams: list[dict[str, str]] = []
+    hls_url: Optional[str] = None
+
+    m = _EVAL_BLOCK_RE.search(html)
+    if m:
+        blob = m.group(1).replace("\\'", "'").replace("\'", "'")
+        parts = m.group(4).split("|")
+        decoded: dict[str, str] = {}
+        for key, tmpl in _TEMPLATE_RE.findall(blob):
+            decoded[key] = _decode_template(tmpl, parts, dvd_id=dvd_id)
+        master = decoded.get("e") or decoded.get("b") or decoded.get("c")
+        if master and master.startswith("http"):
+            hls_url = master
+            streams.append({"url": master, "quality": "adaptive", "format": "hls"})
+        for key, url in decoded.items():
+            if key == "e" or not url.startswith("http") or ".m3u8" not in url:
+                continue
+            if url not in {s["url"] for s in streams}:
+                streams.append({"url": url, "quality": key, "format": "hls"})
+
+    if not streams:
+        for url in _M3U8_RE.findall(html):
+            streams.append({"url": url, "quality": "adaptive", "format": "hls"})
+            hls_url = url
+            break
+
+    default = hls_url or (streams[0]["url"] if streams else None)
+    return {
+        "streams": streams,
+        "hls": hls_url,
+        "default": default,
+        "has_video": bool(streams),
+    }
+
+
+def _parse_list_items(soup: BeautifulSoup, *, limit: int) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for block in soup.select("div.thumbnail"):
+        if len(items) >= limit:
+            break
+        link = block.select_one('a[href*="missav.ai/"]')
+        if not link:
+            continue
+        url = _normalize_video_href(link.get("href") or "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+
+        title_el = block.select_one(".text-sm a") or block.select_one("a[alt]")
+        img = block.select_one("img[data-src], img[alt]")
+        title = _clean_title(
+            _first_non_empty(
+                title_el.get_text(" ", strip=True) if title_el else None,
+                str(link.get("alt") or "").strip(),
+                img.get("alt") if img else None,
+            )
+        ) or "Unknown Video"
+
+        duration = None
+        dur_el = block.select_one("span.absolute.bottom-1.right-1")
+        if dur_el:
+            duration = _format_duration_seconds(dur_el.get_text(strip=True))
+
+        thumb = _best_image_url(img)
+        dvd = _extract_dvd_id(url) or ""
+        if not thumb and dvd:
+            thumb = f"https://fourhoi.com/{dvd}/cover-t.jpg"
+
+        items.append(
+            {
+                "url": url,
+                "title": title,
+                "thumbnail_url": thumb,
+                "duration": duration,
+                "views": None,
+                "uploader_name": None,
+                "tags": None,
+            }
+        )
+
+    if len(items) < limit:
+        for a in soup.select('a[href*="missav.ai/"]'):
+            if len(items) >= limit:
+                break
+            url = _normalize_video_href(a.get("href") or "")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            title = _clean_title(a.get_text(strip=True) or str(a.get("alt") or "")) or "Unknown Video"
+            items.append(
+                {
+                    "url": url,
+                    "title": title,
+                    "thumbnail_url": None,
+                    "duration": None,
+                    "views": None,
+                    "uploader_name": None,
+                    "tags": None,
+                }
+            )
+
+    return items[:limit]
+
+
+def _build_list_page_url(base_url: str, page: int) -> str:
+    raw = (base_url or "").strip()
+    if not raw.startswith("http"):
+        raw = f"{BASE_SITE.rstrip('/')}/{raw.lstrip('/')}"
+    parsed = urlparse(raw)
+    q = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    page_num = max(1, int(page) if page else 1)
+    if page_num <= 1:
+        q.pop("page", None)
+    else:
+        q["page"] = str(page_num)
+    query = urlencode(q) if q else ""
+    return urlunparse(
+        (
+            parsed.scheme or "https",
+            parsed.netloc or SITE_HOST,
+            parsed.path or "/",
+            "",
+            query,
+            "",
+        )
+    )
+
+
+def parse_video_page(
+    html: str,
+    url: str,
+    *,
+    video: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    soup = BeautifulSoup(html, "lxml")
+    dvd_id = _extract_dvd_id(url) or ""
+    page_url = _canonical_video_url(dvd_id) if dvd_id else url
+
+    title = _clean_title(
+        _first_non_empty(
+            soup.select_one("h1").get_text(" ", strip=True) if soup.select_one("h1") else None,
+            _meta(soup, prop="og:title"),
+            soup.title.get_text(strip=True) if soup.title else None,
+        )
+    ) or "Unknown Video"
+
+    thumbnail = _first_non_empty(
+        _meta(soup, prop="og:image"),
+        _best_image_url(soup.select_one("img")),
+    )
+    if thumbnail and thumbnail.startswith("//"):
+        thumbnail = f"https:{thumbnail}"
+    if not thumbnail and dvd_id:
+        thumbnail = f"https://fourhoi.com/{dvd_id}/cover-n.jpg"
+
+    duration = _format_duration_seconds(_meta(soup, prop="og:video:duration"))
+    upload_date = _meta(soup, prop="og:video:release_date")
+
+    tags: list[str] = []
+    for a in soup.select('a[href*="/genres/"], a[href*="/actresses/"], a[href*="/makers/"]'):
+        tag = a.get_text(strip=True)
+        if tag and tag not in tags and len(tag) < 60:
+            tags.append(tag)
+
+    uploader = None
+    actress_links = soup.select('a[href*="/actresses/"]')
+    if actress_links:
+        uploader = actress_links[0].get_text(strip=True) or None
+
+    related = _parse_list_items(soup, limit=40)
+    related = [r for r in related if r.get("url") != page_url]
+
+    video_data = video or _streams_from_player(html, dvd_id=dvd_id)
+    if not video_data.get("streams"):
+        video_data = {
+            "streams": [],
+            "hls": None,
+            "default": page_url,
+            "has_video": False,
+        }
+
+    return {
+        "url": page_url,
+        "title": title,
+        "description": _meta(soup, prop="og:description"),
+        "thumbnail_url": thumbnail,
+        "duration": duration,
+        "views": None,
+        "uploader_name": uploader,
+        "category": None,
+        "tags": tags or None,
+        "upload_date": upload_date,
+        "video": {
+            k: v
+            for k, v in video_data.items()
+            if k in ("streams", "hls", "default", "has_video")
+        },
+        "related_videos": related,
+    }
+
+
+async def scrape(url: str) -> dict[str, Any]:
+    dvd_id = _extract_dvd_id(url)
+    if not dvd_id:
+        raise ValueError(f"Unsupported MissAV URL: {url}")
+
+    parsed = urlparse(url)
+    parts = [p for p in (parsed.path or "").split("/") if p]
+    locale = "en"
+    if parts and parts[0].lower() in _LOCALES:
+        locale = parts[0].lower().split("-")[0]
+
+    page_url = _canonical_video_url(dvd_id, locale=locale)
+    html = await fetch_page(page_url, referer=BASE_SITE)
+    video_data = _streams_from_player(html, dvd_id=dvd_id)
+    return parse_video_page(html, page_url, video=video_data)
+
+
+async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[dict[str, Any]]:
+    page_url = _build_list_page_url(base_url, page)
+    try:
+        html = await fetch_page(page_url, referer=base_url or BASE_SITE)
+    except Exception:
+        return []
+    soup = BeautifulSoup(html, "lxml")
+    return _parse_list_items(soup, limit=limit)
