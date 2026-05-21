@@ -149,11 +149,21 @@ def _normalize_video_href(href: str) -> Optional[str]:
 
 
 def _list_section_id(base_url: str) -> str:
-    path = (urlparse(base_url).path or "/").lower()
-    if "/4k/" in path or path.rstrip("/") == "/4k":
-        return "list_videos_latest_videos_list"
-    if "/tags/" in path:
+    path = (urlparse(base_url).path or "/").lower().rstrip("/") or "/"
+
+    # Tag detail pages (e.g. /tags/kou-jiao/)
+    if path.startswith("/tags/") and path != "/tags":
         return "list_videos_common_videos_list"
+
+    # Latest updates and 4K use the same primary list block
+    if path in ("/4k", "/latest-updates"):
+        return "list_videos_latest_videos_list"
+
+    # Rankings / popularity listings
+    if path in ("/top-rated", "/most-popular"):
+        return "list_videos_common_videos_list"
+
+    # Homepage and other fallbacks (e.g. /)
     return "list_videos_most_recent_videos"
 
 
