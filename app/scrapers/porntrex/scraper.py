@@ -27,9 +27,13 @@ _DEFAULT_HEADERS = {
     "Cookie": "age_pass=1",
 }
 
-_VIDEO_PATH_RE = re.compile(r"^/video/(\d+)/[^/]+/?$", re.IGNORECASE)
+_VIDEO_PATH_RE = re.compile(r"^/video/(\d+)(?:/([^/]+))?/?$", re.IGNORECASE)
 _VIDEO_HREF_RE = re.compile(
-    r'href=["\'](?:https?://(?:www\.)?porntrex\.com)?/video/(\d+)/([^"\']+)/?["\']',
+    r'href=["\'](?:https?://(?:www\.)?porntrex\.com)?/video/(\d+)(?:/([^"\']*?))?/?["\']',
+    re.IGNORECASE,
+)
+_VIDEO_PATH_INLINE_RE = re.compile(
+    r"(?:https?://(?:www\.)?porntrex\.com)?/video/(\d+)(?:/([\w\-]+))?/?",
     re.IGNORECASE,
 )
 _KT_URL_KEYS = r"(?:video_url|video_url_text|video_alt_url|video_alt_url2)"
@@ -56,9 +60,30 @@ def get_categories() -> list[dict]:
         return []
 
 
+async def _fetch_with_curl_cffi(url: str) -> Optional[str]:
+    try:
+        from curl_cffi.requests import AsyncSession
+    except ImportError:
+        return None
+
+    headers = dict(_DEFAULT_HEADERS)
+    for imp in ("chrome120", "chrome110", "safari15_3"):
+        try:
+            async with AsyncSession(impersonate=imp, headers=headers, timeout=45.0) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    return resp.text
+        except Exception:
+            continue
+    return None
+
+
 async def fetch_page(url: str, *, referer: str | None = None) -> str:
     headers = dict(_DEFAULT_HEADERS)
     headers["Referer"] = referer or BASE_SITE
+    text = await _fetch_with_curl_cffi(url)
+    if text:
+        return text
     return await pool_fetch_html(url, headers=headers)
 
 
@@ -351,100 +376,119 @@ def _thumbnail_from_screenshot_item(el: Any) -> Optional[str]:
     return None
 
 
-def _find_list_block(el: Any) -> Any:
-    for parent in el.parents:
+def _card_container_for_anchor(anchor: Any) -> Any:
+    for parent in anchor.parents:
+        if getattr(parent, "name", None) in ("body", "html", "[document]"):
+            break
         classes = " ".join(parent.get("class") or []).lower()
         if any(
             token in classes
-            for token in ("video-item", "thumb-block", "thumb", "item-thumb", "video-thumb")
+            for token in (
+                "video-item",
+                "thumb-block",
+                "thumb",
+                "item-thumb",
+                "video-thumb",
+                "thumb-list",
+                "videos-list",
+                "list-videos",
+            )
         ):
             return parent
-    return el.parent
+    return anchor.parent
 
 
-def _parse_list_items(soup: BeautifulSoup, *, limit: int) -> list[dict[str, Any]]:
+def _list_item_from_context(
+    *,
+    href: str,
+    link: Any | None,
+    block: Any | None,
+) -> dict[str, Any]:
+    title_el = None
+    screenshot_el = None
+    views_el = None
+    if block is not None and hasattr(block, "select_one"):
+        title_el = block.select_one(".video-item-title, a.video-item-title")
+        screenshot_el = block.select_one(".screenshot-item, img.screenshot-item")
+        views_el = block.select_one(".video-item-views, .info.video-item-views")
+
+    raw_title = _list_title_raw(title_el, link) or (
+        link.get_text(" ", strip=True) if link is not None else None
+    )
+    parsed_title, parsed_dur, parsed_views = _parse_list_card_text(raw_title)
+    title = (
+        parsed_title
+        or _clean_list_title(raw_title)
+        or _clean_list_title(link.get("title") if link is not None else None)
+        or "Unknown Video"
+    )
+
+    thumb = _thumbnail_from_screenshot_item(screenshot_el)
+    if not thumb and link is not None:
+        thumb = _thumbnail_from_screenshot_item(link.find("img")) or _best_image_url(
+            link.find("img")
+        )
+    if not thumb and block is not None:
+        thumb = _thumbnail_from_screenshot_item(
+            block.select_one(".screenshot-item, img.screenshot-item, img")
+        )
+
+    duration = (
+        _list_duration_from_block(block, fallback_text=raw_title) if block is not None else None
+    ) or parsed_dur
+    views = (
+        _extract_views(views_el.get_text(" ", strip=True) if views_el else None)
+        if views_el is not None
+        else None
+    ) or parsed_views
+
+    return {
+        "url": href,
+        "title": title,
+        "thumbnail_url": thumb,
+        "duration": duration,
+        "views": views,
+        "uploader_name": None,
+    }
+
+
+def _parse_list_items(soup: BeautifulSoup, *, limit: int, html: str = "") -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    blocks: list[Any] = []
-    for sel in (
-        "div.video-item",
-        "div.thumb-block",
-        "div.thumb",
-        "li.video-item",
-        ".videos-list .item",
-        ".list-videos .item",
-    ):
-        blocks.extend(soup.select(sel))
-
-    if not blocks:
-        for title_el in soup.select(".video-item-title"):
-            blocks.append(_find_list_block(title_el))
-
-    for block in blocks:
+    def _add(href: str, link: Any | None = None, block: Any | None = None) -> None:
         if len(items) >= limit:
-            break
-
-        link = block.select_one("a[href*='/video/']") if hasattr(block, "select_one") else None
-        href = _normalize_video_href(link.get("href") or "") if link else None
-        if not href:
-            m = _VIDEO_HREF_RE.search(str(block))
-            if m:
-                href = _canonical_video_url(m.group(1), m.group(2))
-        if not href or href in seen:
-            continue
-        seen.add(href)
-
-        title_el = (
-            block.select_one(".video-item-title, a.video-item-title")
-            if hasattr(block, "select_one")
-            else None
-        )
-        raw_title = _list_title_raw(
-            title_el,
-            link,
-        ) or (link.get_text(" ", strip=True) if link else None)
-        parsed_title, parsed_dur, parsed_views = _parse_list_card_text(raw_title)
-        title = (
-            parsed_title
-            or _clean_list_title(raw_title)
-            or _clean_list_title(link.get("title") if link else None)
-            or "Unknown Video"
-        )
-
-        screenshot_el = (
-            block.select_one(".screenshot-item, img.screenshot-item")
-            if hasattr(block, "select_one")
-            else None
-        )
-        thumb = _thumbnail_from_screenshot_item(screenshot_el)
-        if not thumb and link:
-            thumb = _thumbnail_from_screenshot_item(link.find("img")) or _best_image_url(
-                link.find("img")
-            )
-
-        duration = _list_duration_from_block(block, fallback_text=raw_title) or parsed_dur
-
-        views_el = (
-            block.select_one(".video-item-views, .info.video-item-views")
-            if hasattr(block, "select_one")
-            else None
-        )
-        views = (
-            _extract_views(views_el.get_text(" ", strip=True) if views_el else None)
-            or parsed_views
-        )
-
+            return
+        canon = _normalize_video_href(href)
+        if not canon or canon in seen:
+            return
+        seen.add(canon)
+        ctx_block = block
+        if link is not None and ctx_block is None:
+            ctx_block = _card_container_for_anchor(link)
         items.append(
-            {
-                "url": href,
-                "title": title,
-                "thumbnail_url": thumb,
-                "duration": duration,
-                "views": views,
-                "uploader_name": None,
-            }
+            _list_item_from_context(href=canon, link=link, block=ctx_block)
         )
+
+    for link in soup.select("a[href*='/video/']"):
+        _add(link.get("href") or "", link=link)
+
+    if len(items) < limit:
+        for block in soup.select(
+            "div.video-item, div.thumb-block, div.thumb, li.video-item, "
+            ".videos-list .item, .list-videos .item, .thumbs .thumb"
+        ):
+            if len(items) >= limit:
+                break
+            inner = block.select_one("a[href*='/video/']") if hasattr(block, "select_one") else None
+            if not inner:
+                continue
+            _add(inner.get("href") or "", link=inner, block=block)
+
+    if len(items) < limit and html:
+        for vid, slug in _VIDEO_PATH_INLINE_RE.findall(html):
+            slug = (slug or "").strip() or None
+            _add(_canonical_video_url(vid, slug))
 
     return items[:limit]
 
@@ -463,26 +507,28 @@ def _canonical_video_url(video_id: str, slug: str | None = None) -> str:
 
 def _normalize_video_href(href: str) -> Optional[str]:
     href = (href or "").strip()
-    if not href:
+    if not href or href.startswith("#") or href.lower().startswith("javascript:"):
         return None
     if href.startswith("//"):
         href = f"https:{href}"
     elif href.startswith("/"):
         href = f"https://www.porntrex.com{href}"
 
-    parsed = urlparse(href)
+    parsed = urlparse(href.split("#", 1)[0])
     host = (parsed.netloc or "").lower()
-    if SITE_HOST not in host:
-        return None
-    if not _VIDEO_PATH_RE.match(parsed.path or ""):
-        return None
-    if parsed.query:
+    if host and SITE_HOST not in host:
         return None
 
-    parts = [p for p in (parsed.path or "").strip("/").split("/") if p]
-    if len(parts) < 3 or parts[0].lower() != "video":
-        return None
-    vid, slug = parts[1], parts[2]
+    m = _VIDEO_PATH_RE.match(parsed.path or "")
+    if not m:
+        inline = _VIDEO_PATH_INLINE_RE.search(href)
+        if not inline:
+            return None
+        vid, slug = inline.group(1), (inline.group(2) or "").strip() or None
+        return _canonical_video_url(vid, slug)
+
+    vid = m.group(1)
+    slug = (m.group(2) or "").strip() or None
     return _canonical_video_url(vid, slug)
 
 
@@ -1058,52 +1104,54 @@ def _build_list_page_url(base_url: str, page: int) -> str:
     )
 
 
+def _is_blocked_list_html(html: str) -> bool:
+    low = (html or "").lower()
+    if len(html) < 2500:
+        return True
+    if "age-restricted" in low and "/video/" not in low:
+        return True
+    if "confirm you are" in low and "video-item" not in low and "/video/" not in low:
+        return True
+    return False
+
+
 async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[dict[str, Any]]:
+    referer = base_url if (base_url or "").startswith("http") else BASE_SITE
     page_url = _build_list_page_url(base_url, page)
-    try:
-        html = await fetch_page(page_url, referer=base_url or BASE_SITE)
-    except Exception:
+
+    try_urls = [page_url]
+    alt_url = _build_list_page_url("https://www.porntrex.com/latest-updates/", page)
+    if alt_url not in try_urls:
+        try_urls.append(alt_url)
+
+    html = ""
+    for url in try_urls:
+        try:
+            candidate = await fetch_page(url, referer=referer)
+            if candidate and not _is_blocked_list_html(candidate):
+                html = candidate
+                break
+        except Exception:
+            continue
+
+    if not html or _is_blocked_list_html(html):
         return []
 
     soup = BeautifulSoup(html, "lxml")
-    items = _parse_list_items(soup, limit=limit)
+    items = _parse_list_items(soup, limit=limit, html=html)
     if items:
         return items
 
-    # Fallback when markup lacks video-item wrappers (older/alternate templates).
-    seen: set[str] = set()
-    for a in soup.select("a[href*='/video/']"):
-        if len(items) >= limit:
-            break
-        href = _normalize_video_href(a.get("href") or "")
-        if not href or href in seen:
+    for url in try_urls[1:]:
+        try:
+            candidate = await fetch_page(url, referer=referer)
+            if not candidate or _is_blocked_list_html(candidate):
+                continue
+            soup = BeautifulSoup(candidate, "lxml")
+            items = _parse_list_items(soup, limit=limit, html=candidate)
+            if items:
+                return items
+        except Exception:
             continue
-        seen.add(href)
-        container = a.find_parent(["article", "li", "div"]) or a
-        screenshot_el = container.select_one(".screenshot-item, img.screenshot-item")
-        thumb = _thumbnail_from_screenshot_item(screenshot_el) or _best_image_url(
-            a.find("img") or container.find("img")
-        )
-        title_el = container.select_one(".video-item-title, a.video-item-title")
-        raw_title = _list_title_raw(title_el, a) or a.get_text(" ", strip=True)
-        parsed_title, parsed_dur, parsed_views = _parse_list_card_text(raw_title)
-        views_el = container.select_one(".video-item-views, .info.video-item-views")
-        items.append(
-            {
-                "url": href,
-                "title": parsed_title
-                or _clean_list_title(raw_title)
-                or _clean_list_title(a.get("title"))
-                or "Unknown Video",
-                "thumbnail_url": thumb,
-                "duration": _list_duration_from_block(container, fallback_text=raw_title)
-                or parsed_dur,
-                "views": _extract_views(
-                    views_el.get_text(" ", strip=True) if views_el else None
-                )
-                or parsed_views,
-                "uploader_name": None,
-            }
-        )
 
-    return items[:limit]
+    return []
