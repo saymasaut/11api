@@ -2508,3 +2508,69 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=missav"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://missav.ai/en/fc2-ppv-1434674"
 ```
+
+## Jable Implementation Notes
+
+[Jable.TV](https://jable.tv/) is a JAV catalog site. Video pages use slug URLs under `/videos/{code}/` (e.g. `start-579`). HLS is exposed inline as `var hlsUrl = '...m3u8'` on the player page (CDN hosts such as `*.mushroomtrack.com`).
+
+### Host aliases
+
+- `jable.tv`
+- `www.jable.tv`
+
+### Listing and pagination (`list_videos`)
+
+- Latest: `https://jable.tv/latest-updates/`
+- Hot: `https://jable.tv/hot/`
+- New release: `https://jable.tv/new-release/`
+- Categories: `https://jable.tv/categories/{slug}/`
+- Tags: `https://jable.tv/tags/{slug}/`
+- Parse cards in `div.video-img-box` → `.img-box a[href*='/videos/']`; title in `h6.title a`; thumb `img[data-src]`; duration in `span.label`; views in `p.sub-title`
+- Pagination: append page segment — page 2 of latest is `https://jable.tv/latest-updates/2/`
+
+### Metadata and streams (`scrape`)
+
+- Canonical page: `https://jable.tv/videos/{slug}/` (also accept mirror paths like `https://jable.tv/s0/videos/{slug}/`)
+- Metadata: `og:title`, `og:image`, `section.video-info h4`, actress links in `.models`, tags in `h5.tags a`, views in `h6 span`, release date in `.header-right span.inactive-color`
+- Streams: `var hlsUrl = 'https://.../*.m3u8'` in inline script next to `#player` (Hls.js / Plyr)
+
+### Categories (`get_categories`)
+
+Seed from nav: Latest Updates, Hot, New Release, Categories index, sample category/tag pages (Roleplay, Chinese Subtitle, Uniform, Pantyhose, NTR).
+
+### Registration checklist for Jable
+
+Besides creating `backend/app/scrapers/jable/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=jable` or `source=jabletv`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `jable.tv`, `assets-cdn.jable.tv`, `mushroomtrack.com`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="jable"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### Jable verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://jable.tv/videos/start-579/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://jable.tv/latest-updates/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=jable"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://jable.tv/videos/start-579/"
+```
