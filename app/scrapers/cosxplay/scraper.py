@@ -145,10 +145,38 @@ def _extract_views(text: str | None) -> Optional[str]:
     return _normalize_numberish(m.group(1))
 
 
+def _is_placeholder_image_url(url: str) -> bool:
+    low = (url or "").strip().lower()
+    if not low or low.startswith("data:"):
+        return True
+    return any(x in low for x in ("placeholder", "/girls/flags/", "1x1.", "blank."))
+
+
+def _normalize_image_url(url: str) -> Optional[str]:
+    u = (url or "").strip()
+    if not u or _is_placeholder_image_url(u):
+        return None
+    if u.startswith("//"):
+        return f"https:{u}"
+    if u.startswith("/"):
+        return urljoin(BASE_SITE, u)
+    if u.startswith("http"):
+        return u
+    return None
+
+
 def _best_image_url(img: Any) -> Optional[str]:
     if img is None:
         return None
-    for key in ("data-src", "data-original", "data-lazy-src", "srcset", "src"):
+    classes = " ".join(img.get("class") or []).lower()
+    # Kolortube cards: lazy `data-src` until JS adds `loaded` and copies to `src`.
+    prefer_src_first = "loaded" in classes or "video-img" in classes
+    keys = (
+        ("src", "data-src", "data-original", "data-lazy-src", "srcset")
+        if prefer_src_first
+        else ("data-src", "data-original", "data-lazy-src", "srcset", "src")
+    )
+    for key in keys:
         v = img.get(key)
         if not v:
             continue
@@ -157,11 +185,24 @@ def _best_image_url(img: Any) -> Optional[str]:
             continue
         if key == "srcset" and " " in url:
             url = url.split(" ", 1)[0].strip()
-        if url.startswith("//"):
-            return f"https:{url}"
-        if url.startswith("/"):
-            return urljoin(BASE_SITE, url)
-        return url
+        normalized = _normalize_image_url(url)
+        if normalized:
+            return normalized
+    return None
+
+
+def _thumb_from_video_block(block: Any) -> Optional[str]:
+    """Prefer main poster `img.video-img` inside `.thumb`, not tag flag icons."""
+    for selector in (
+        "a.thumb img.video-img",
+        "img.video-img.img-fluid",
+        "img.video-img",
+    ):
+        img = block.select_one(selector)
+        if img:
+            thumb = _best_image_url(img)
+            if thumb:
+                return thumb
     return None
 
 
@@ -464,15 +505,15 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
             continue
 
         title_el = block.select_one(".title")
-        img = block.select_one("img.video-img, img")
+        poster_img = block.select_one("a.thumb img.video-img, img.video-img")
         title = _clean_title(
             _first_non_empty(
                 title_el.get_text(" ", strip=True) if title_el else None,
                 a.get("aria-label"),
-                img.get("alt") if img else None,
+                poster_img.get("alt") if poster_img else None,
             )
         ) or "Unknown Video"
-        thumb = _best_image_url(img)
+        thumb = _thumb_from_video_block(block)
 
         ctext = block.get_text(" ", strip=True)
         duration_el = block.select_one(".duration")
