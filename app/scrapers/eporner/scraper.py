@@ -78,6 +78,16 @@ def _canonical_video_url(video_id: str, slug: str | None = None) -> str:
     return f"https://www.eporner.com/video-{video_id}/"
 
 
+def _embed_player_url(video_id: str) -> str:
+    return f"https://www.eporner.com/embed/{video_id}/"
+
+
+def _is_embed_page_url(url: str) -> bool:
+    path = (urlparse(url or "").path or "").lower().strip("/")
+    parts = [p for p in path.split("/") if p]
+    return len(parts) >= 2 and parts[0] == "embed" and bool(parts[1])
+
+
 def _normalize_video_href(href: str) -> Optional[str]:
     href = (href or "").strip()
     if not href:
@@ -99,6 +109,41 @@ def _normalize_video_href(href: str) -> Optional[str]:
         if last != vid and not last.startswith("video-"):
             slug = last
     return _canonical_video_url(vid, slug)
+
+
+def _find_canonical_video_page_url(
+    soup: BeautifulSoup, html: str, video_id: str
+) -> Optional[str]:
+    for sel in (
+        ("link", {"rel": "canonical"}),
+        ("meta", {"property": "og:url"}),
+    ):
+        tag = soup.find(sel[0], attrs=sel[1])
+        if tag:
+            href = tag.get("href") or tag.get("content")
+            if href:
+                canon = _normalize_video_href(str(href))
+                if canon:
+                    return canon
+
+    m = re.search(
+        rf"https?://(?:www\.)?eporner\.com/video-{re.escape(video_id)}(?:/[^\"'\s<>]*)?",
+        html,
+        re.IGNORECASE,
+    )
+    if m:
+        return _normalize_video_href(m.group(0))
+    return None
+
+
+def _ensure_embed_stream(video_data: dict[str, Any], video_id: str) -> None:
+    embed_url = _embed_player_url(video_id)
+    streams = video_data.setdefault("streams", [])
+    if not any(s.get("format") == "embed" for s in streams):
+        streams.append({"url": embed_url, "quality": "embed", "format": "embed"})
+    if not video_data.get("has_video"):
+        video_data["has_video"] = True
+        video_data["default"] = embed_url
 
 
 async def _fetch_with_curl_cffi(url: str, *, json_mode: bool = False) -> Optional[str | dict]:
@@ -288,6 +333,8 @@ def _streams_from_html(html: str) -> dict[str, Any]:
                 continue
             if "/thumb" in url.lower() or "preview" in url.lower():
                 continue
+            if re.search(r"eporner\.com/embed/", url, re.I):
+                continue
             seen.add(url)
             m = re.search(r"/(\d{3,4})p/", url, re.I) or re.search(r"_(\d{3,4})p\.mp4", url, re.I)
             quality = f"{m.group(1)}p" if m else ("adaptive" if fmt == "hls" else "unknown")
@@ -476,10 +523,18 @@ def parse_video_page(
     *,
     video: dict[str, Any] | None = None,
     api_video: dict | None = None,
+    page_url: str | None = None,
 ) -> dict[str, Any]:
     soup = BeautifulSoup(html, "lxml") if html else BeautifulSoup("", "lxml")
     video_id = _extract_video_id(url)
-    canon = _normalize_video_href(url) or (f"https://www.eporner.com/video-{video_id}/" if video_id else url)
+    response_url = page_url or url
+    if _is_embed_page_url(response_url) and video_id:
+        canon = _embed_player_url(video_id)
+    else:
+        canon = (
+            _normalize_video_href(url)
+            or (f"https://www.eporner.com/video-{video_id}/" if video_id else url)
+        )
 
     title = _clean_title(
         _first_non_empty(
@@ -557,10 +612,13 @@ async def scrape(url: str) -> dict[str, Any]:
     if not video_id:
         raise ValueError(f"Unsupported Eporner URL: {url}")
 
+    is_embed = _is_embed_page_url(url)
+    fetch_url = _embed_player_url(video_id) if is_embed else url
+
     html = ""
     api_video: dict | None = None
     try:
-        html = await fetch_html(url)
+        html = await fetch_html(fetch_url)
     except Exception:
         pass
 
@@ -575,10 +633,54 @@ async def scrape(url: str) -> dict[str, Any]:
         pass
 
     video_data = await _resolve_streams(video_id, html)
+
+    if not video_data.get("has_video"):
+        full_html = ""
+        canonical = None
+        if api_video and api_video.get("url"):
+            canonical = _normalize_video_href(str(api_video["url"]))
+        if not canonical and html:
+            canonical = _find_canonical_video_page_url(
+                BeautifulSoup(html, "lxml"), html, video_id
+            )
+        if canonical:
+            try:
+                full_html = await fetch_html(canonical)
+                video_data = await _resolve_streams(video_id, full_html)
+                if not html:
+                    html = full_html
+            except Exception:
+                pass
+        elif is_embed:
+            try:
+                full_html = await fetch_html(_canonical_video_url(video_id))
+                video_data = await _resolve_streams(video_id, full_html)
+                if not html:
+                    html = full_html
+            except Exception:
+                pass
+
     if not video_data.get("has_video") and api_video:
         video_data = _streams_from_api_v2_video(api_video)
 
-    return parse_video_page(html, url, video=video_data, api_video=api_video)
+    _ensure_embed_stream(video_data, video_id)
+
+    if is_embed:
+        direct = [
+            s
+            for s in video_data.get("streams", [])
+            if s.get("format") in ("mp4", "hls")
+        ]
+        if not direct:
+            video_data["default"] = _embed_player_url(video_id)
+
+    return parse_video_page(
+        html,
+        url,
+        video=video_data,
+        api_video=api_video,
+        page_url=fetch_url if is_embed else url,
+    )
 
 
 async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[dict[str, Any]]:

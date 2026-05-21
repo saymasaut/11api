@@ -2709,7 +2709,7 @@ curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://bindasmood.com/vale
 
 ## Eporner (eporner.com) Implementation Notes
 
-[Eporner](https://www.eporner.com/) is a large tube site with mandatory age verification in some regions. Video pages use alphanumeric IDs under `/video-{id}/{slug}/` (legacy `/hd-porn/{id}/{slug}/` and `/embed/{id}` also work). Streams are resolved via the site XHR API (hash from page HTML), with fallbacks to the public v2 metadata API and HTML `<source>` / MP4 regex extraction.
+[Eporner](https://www.eporner.com/) is a large tube site with mandatory age verification in some regions. Video pages use alphanumeric IDs under `/video-{id}/{slug}/` (legacy `/hd-porn/{id}/{slug}/`). **Embed player URLs** (`/embed/{id}/`, used in iframes) are first-class scrape targets and always expose an `format: "embed"` stream for WebView/iframe playback. Streams are resolved via the site XHR API (hash from page HTML), with fallbacks to the public v2 metadata API and HTML `<source>` / MP4 regex extraction.
 
 ### Host aliases
 
@@ -2725,7 +2725,9 @@ curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://bindasmood.com/vale
 
 ### Metadata and streams (`scrape`)
 
-- Canonical URL: `https://www.eporner.com/video-{id}/{slug}/`
+- Canonical watch URL: `https://www.eporner.com/video-{id}/{slug}/`
+- Embed player URL: `https://www.eporner.com/embed/{id}/` (iframe `src`, e.g. `https://www.eporner.com/embed/5avQdSA3oMK/`)
+- When scraping an embed URL, the response `url` stays on `/embed/{id}/`; direct MP4/HLS are resolved from the embed page or the linked full video page; an embed stream is always included
 - **Primary streams:** parse `hash` (32-char hex) from page → `GET /xhr/video/{id}?hash={calc_hash}&device=generic&domain=www.eporner.com&fallback=false` → `sources` dict (MP4 + HLS)
 - **calc_hash:** split hash into four 8-char hex chunks, each encoded to base-36 (same as yt-dlp `EpornerIE`)
 - **Fallback streams:** `GET /api/v2/video/search/?id={id}&per_page=1&thumbsize=big` → `all_qualities` MP4 URLs on `static.eporner.com`
@@ -2773,4 +2775,8 @@ curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://www.eporner.com/recen
 curl "http://127.0.0.1:8000/api/v1/categories?source=eporner"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://www.eporner.com/video-FJsA19J3Y3H/one-of-the-greats/"
+
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://www.eporner.com/embed/5avQdSA3oMK/\"}"
 ```
