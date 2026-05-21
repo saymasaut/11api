@@ -2261,7 +2261,7 @@ curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://ggjav.com/main/vide
 - Tag browse: `https://porn87.com/main/tag?name={tag}` (e.g. `高清日本AV`, `中港台`)
 - Text search: `https://porn87.com/main/search?name={query}`
 - Parse cards in `div.chunk > a[href*="/main/html?id="]`; thumb `img.video_thumbnail`, duration `.video_time`, views/likes via `fi-eye` / `fi-heart`
-- Pagination: query param `page` is **zero-based** in URLs (UI page 2 → `page=1`; API `page=1` omits the param)
+- Pagination: query param `page` is **1-based** (UI page 2 → `page=2`; API `page=1` omits the param)
 
 ### Metadata and streams (`scrape`)
 

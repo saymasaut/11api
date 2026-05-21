@@ -255,11 +255,12 @@ def _build_list_page_url(base_url: str, page: int) -> str:
         raw = urljoin(BASE_SITE, raw.lstrip("/"))
     parsed = urlparse(raw)
     q = dict(parse_qsl(parsed.query.replace("&&", "&"), keep_blank_values=True))
-    # Site pagination: page 2 in UI uses `page=1` in the query string.
-    if page <= 1:
+    # Site pagination is 1-based (`page=2` for UI page 2); page 1 omits the param.
+    page_num = max(1, int(page) if page else 1)
+    if page_num <= 1:
         q.pop("page", None)
     else:
-        q["page"] = str(page - 1)
+        q["page"] = str(page_num)
     return urlunparse(
         (
             parsed.scheme or "https",
