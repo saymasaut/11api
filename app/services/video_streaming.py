@@ -6,8 +6,32 @@ Extract and serve video streaming URLs
 from fastapi import HTTPException
 from typing import Any, Optional
 import logging
+import re
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_quality_label(label: Optional[str]) -> str:
+    """Normalize scraper quality labels for matching and API output (720 -> 720p)."""
+    if label is None:
+        return "unknown"
+    text = str(label).strip()
+    if not text:
+        return "unknown"
+    if text.isdigit():
+        return f"{text}p"
+    return text
+
+
+def _quality_labels_match(stream_quality: Optional[str], requested: str) -> bool:
+    """True when stream quality matches requested quality (720 == 720p, 720p_HD == 720p)."""
+    sq = _normalize_quality_label(stream_quality)
+    rq = _normalize_quality_label(requested)
+    if sq == rq:
+        return True
+    sq_base = re.sub(r"[_-]?(hd|sd|uhd|4k)$", "", sq, flags=re.IGNORECASE)
+    rq_base = re.sub(r"[_-]?(hd|sd|uhd|4k)$", "", rq, flags=re.IGNORECASE)
+    return sq_base == rq_base
 
 
 async def get_video_info(url: str, api_base_url: str = "http://localhost:8000") -> dict:
@@ -233,61 +257,59 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
     # But usually this is called by endpoint which calls get_video_info first.
     # Refactoring: we'll just call get_video_info here too.
     # Using default localhost for this low-level helper as it returns raw data
-    info = await get_video_info(url, api_base_url=api_base_url) 
+    info = await get_video_info(url, api_base_url=api_base_url)
     video_data = info["video"]
-    
+    streams = video_data.get("streams", [])
+    matching: list[dict[str, Any]] = []
+    stream_url: Optional[str] = None
+    selected_quality = quality
+    selected_stream: Optional[dict[str, Any]] = None
+
     if quality == "default":
-        stream_url = video_data["default"]
+        stream_url = video_data.get("default")
         selected_quality = "default"
-        
-        # Try to find the quality metadata of the default stream
-        streams = video_data.get("streams", [])
         for s in streams:
             if s.get("url") == stream_url:
-                found_quality = s.get("quality", "default")
-                # Normalize quality: add 'p' suffix if missing
-                if found_quality and found_quality.isdigit():
-                    selected_quality = f"{found_quality}p"
-                else:
-                    selected_quality = found_quality
+                selected_stream = s
+                selected_quality = _normalize_quality_label(s.get("quality", "default"))
                 break
     else:
-        # Find matching quality
-        streams = video_data["streams"]
-        matching = [s for s in streams if s["quality"] == quality]
-        
+        matching = [s for s in streams if _quality_labels_match(s.get("quality"), quality)]
         if matching:
-            stream_url = matching[0]["url"]
-            selected_quality = matching[0]["quality"]
+            selected_stream = matching[0]
+            stream_url = selected_stream.get("url")
+            selected_quality = _normalize_quality_label(selected_stream.get("quality"))
         else:
-            # Fallback to default
-            stream_url = video_data["default"]
+            stream_url = video_data.get("default")
             selected_quality = "default"
             logger.warning(f"Quality {quality} not available, using default")
-    
-    # Determine format and refine quality label
-    # First, check if the scraper provided a specific format
-    fmt = "mp4"
-    selected_stream = matching[0] if (quality != "default" and matching) else None
-    if not selected_stream and quality == "default":
-        # Try to find the stream object for the default URL
-        streams = video_data.get("streams", [])
+            for s in streams:
+                if s.get("url") == stream_url:
+                    selected_stream = s
+                    break
+
+    if not selected_stream and stream_url:
         for s in streams:
             if s.get("url") == stream_url:
                 selected_stream = s
                 break
-    
+
+    if not stream_url:
+        raise HTTPException(
+            status_code=404,
+            detail="No playable stream URL found for this video.",
+        )
+
+    fmt = "mp4"
     if selected_stream and selected_stream.get("format"):
-        fmt = selected_stream["format"]
-        # Preferred mirror is tagged "default" in some scrapers; playback is still embed/WebView.
-        if str(fmt).lower() == "default":
+        fmt = str(selected_stream["format"])
+        if fmt.lower() == "default":
             fmt = "embed"
-    elif ".m3u8" in stream_url:
+    elif stream_url and ".m3u8" in stream_url:
         fmt = "hls"
         if selected_quality == "default":
             selected_quality = "adaptive"
 
-    # Build base response
     response = {
         "stream_url": stream_url,
         "quality": selected_quality,
@@ -425,12 +447,8 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
 
             # Include both HLS and MP4 for these sites to support both streaming and download options
             # Also include 'embed' format for sites like xxxparodyhd
-            quality_label = s.get("quality", "unknown")
-            
-            # Normalize quality label: ensure it has 'p' suffix (e.g., "720" -> "720p")
-            if quality_label and str(quality_label).isdigit():
-                quality_label = f"{quality_label}p"
-                
+            quality_label = _normalize_quality_label(s.get("quality", "unknown"))
+
             qualities[quality_label] = s.get("url")
             if per_stream_format_keys:
                 sf = s.get("format")
