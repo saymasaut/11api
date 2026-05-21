@@ -2706,3 +2706,71 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=bindasmood"
 
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://bindasmood.com/valentine-date-2026-hindi-uncut-xxx-video/"
 ```
+
+## Eporner (eporner.com) Implementation Notes
+
+[Eporner](https://www.eporner.com/) is a large tube site with mandatory age verification in some regions. Video pages use alphanumeric IDs under `/video-{id}/{slug}/` (legacy `/hd-porn/{id}/{slug}/` and `/embed/{id}` also work). Streams are resolved via the site XHR API (hash from page HTML), with fallbacks to the public v2 metadata API and HTML `<source>` / MP4 regex extraction.
+
+### Host aliases
+
+- `eporner.com`
+- `www.eporner.com`
+
+### Listing and pagination (`list_videos`)
+
+- Home: `https://www.eporner.com/`
+- Feeds: `/recent/`, `/popular/`, `/top-rated/`, `/longest/`, `/4k/`, `/cats/`
+- Parse `div.mb` cards → `a[href*="/video-"]` or `/hd-porn/`; title from `.mbtit a`; thumb `img`; duration `.mbtim`; views `.mbvie`
+- Pagination: append page number to path (e.g. `/recent/2/`, home page 2 → `/2/`)
+
+### Metadata and streams (`scrape`)
+
+- Canonical URL: `https://www.eporner.com/video-{id}/{slug}/`
+- **Primary streams:** parse `hash` (32-char hex) from page → `GET /xhr/video/{id}?hash={calc_hash}&device=generic&domain=www.eporner.com&fallback=false` → `sources` dict (MP4 + HLS)
+- **calc_hash:** split hash into four 8-char hex chunks, each encoded to base-36 (same as yt-dlp `EpornerIE`)
+- **Fallback streams:** `GET /api/v2/video/search/?id={id}&per_page=1&thumbsize=big` → `all_qualities` MP4 URLs on `static.eporner.com`
+- **HTML fallback:** `<video><source>` tags and `.mp4` / `.m3u8` regex
+- Fetch uses `curl_cffi` impersonation when available (helps with age gate / blocks), then shared `pool.fetch_html`
+
+### Categories (`get_categories`)
+
+Home, Recent, Popular, Top Rated, Longest, 4K, Categories index (`categories.json`).
+
+### Registration checklist for Eporner
+
+Besides creating `backend/app/scrapers/eporner/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=eporner`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `eporner.com`, `static.eporner.com`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="eporner"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### Eporner verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://www.eporner.com/video-FJsA19J3Y3H/one-of-the-greats/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://www.eporner.com/recent/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://www.eporner.com/recent/2/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=eporner"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://www.eporner.com/video-FJsA19J3Y3H/one-of-the-greats/"
+```
