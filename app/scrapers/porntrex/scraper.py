@@ -10,34 +10,22 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 import httpx
 from bs4 import BeautifulSoup
 
-from app.core.pool import fetch_html as pool_fetch_html, get_random_user_agent
+from app.core.pool import fetch_html as pool_fetch_html
 
 BASE_SITE = "https://www.porntrex.com/"
 SITE_HOST = "porntrex.com"
 SITE_ALIASES = frozenset({"porntrex.com", "www.porntrex.com"})
 
 _DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate",
     "Referer": BASE_SITE,
-    "Origin": "https://www.porntrex.com",
-    "DNT": "1",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "sec-ch-ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Windows"',
-    "Cookie": "age_pass=1; accessAgeDisclaimerPH=1; accessAgeDisclaimerUK=1",
+    "Cookie": "age_pass=1",
 }
-
-_HOMEPAGE_PATHS = frozenset({"", "/", "//"})
-_LIST_FALLBACK_PATH = "/latest-updates"
-# KVS listing page size (matches explore pageSize=32); used for ?from= offset pagination.
-_KVS_PAGE_SIZE = 32
 
 _VIDEO_PATH_RE = re.compile(r"^/video/(\d+)/[^/]+/?$", re.IGNORECASE)
 _VIDEO_HREF_RE = re.compile(
@@ -68,57 +56,10 @@ def get_categories() -> list[dict]:
         return []
 
 
-def _normalize_site_url(url: str) -> str:
-    """Collapse duplicate path slashes (e.g. https://www.porntrex.com//)."""
-    parsed = urlparse((url or "").strip())
-    path = parsed.path or "/"
-    while "//" in path:
-        path = path.replace("//", "/")
-    if not path.startswith("/"):
-        path = f"/{path}"
-    return urlunparse(
-        (
-            parsed.scheme or "https",
-            parsed.netloc or f"www.{SITE_HOST}",
-            path,
-            parsed.params,
-            parsed.query,
-            parsed.fragment,
-        )
-    )
-
-
-def _is_homepage_listing(base_url: str) -> bool:
-    parsed = urlparse(_normalize_site_url(base_url or BASE_SITE))
-    path = (parsed.path or "/").rstrip("/") or ""
-    return path in _HOMEPAGE_PATHS
-
-
-def _browser_headers(*, referer: str | None = None, accept: str | None = None) -> dict[str, str]:
-    ref = _normalize_site_url(referer or BASE_SITE)
+async def fetch_page(url: str, *, referer: str | None = None) -> str:
     headers = dict(_DEFAULT_HEADERS)
-    headers["User-Agent"] = get_random_user_agent()
-    headers["Referer"] = ref
-    headers["Sec-Fetch-Site"] = "same-origin" if SITE_HOST in ref else "cross-site"
-    if accept:
-        headers["Accept"] = accept
-    return headers
-
-
-async def fetch_page(
-    url: str,
-    *,
-    referer: str | None = None,
-    retries: int = 3,
-    quiet: bool = False,
-) -> str:
-    target = _normalize_site_url(url)
-    return await pool_fetch_html(
-        target,
-        headers=_browser_headers(referer=referer),
-        retries=retries,
-        quiet=quiet,
-    )
+    headers["Referer"] = referer or BASE_SITE
+    return await pool_fetch_html(url, headers=headers)
 
 
 def _first_non_empty(*values: Optional[str]) -> Optional[str]:
@@ -608,7 +549,13 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
 async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Optional[str]:
     base = get_file_url.split("?", 1)[0].strip().rstrip("/")
     ref = referer.strip() if referer.strip().startswith("http") else BASE_SITE
-    headers = _browser_headers(referer=ref, accept="*/*")
+    headers = {
+        "User-Agent": _DEFAULT_HEADERS["User-Agent"],
+        "Referer": ref,
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cookie": _DEFAULT_HEADERS.get("Cookie", ""),
+    }
 
     async def _attempt(url: str, method: str, range_hdr: Optional[str]) -> Optional[str]:
         h = dict(headers)
@@ -764,7 +711,7 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
 
 
 async def _fetch_embed_html(video_id: str, *, referer: str) -> str:
-    return await fetch_page(_embed_page_url(video_id), referer=referer, retries=3, quiet=False)
+    return await fetch_page(_embed_page_url(video_id), referer=referer)
 
 
 async def scrape(url: str) -> dict[str, Any]:
@@ -773,10 +720,7 @@ async def scrape(url: str) -> dict[str, Any]:
         raise ValueError(f"Unsupported PornTrex URL: {url}")
 
     video_id = _extract_video_id(canon)
-    try:
-        html = await fetch_page(canon, referer=canon, retries=2, quiet=True)
-    except Exception:
-        html = ""
+    html = await fetch_page(canon, referer=canon)
     data = parse_video_page(html, canon)
 
     embed_html: str | None = None
@@ -814,183 +758,63 @@ async def scrape(url: str) -> dict[str, Any]:
     return data
 
 
-def _resolve_listing_base(base_url: str) -> str:
-    """
-    Normalize listing base URL.
-    Homepage (porntrex.com/) has no /2/ listing — use /latest-updates/ for all pages.
-    """
-    parsed = urlparse(_normalize_site_url(base_url or BASE_SITE))
-    path = (parsed.path or "/").rstrip("/")
-    if path in _HOMEPAGE_PATHS:
-        return _normalize_site_url(f"https://www.{SITE_HOST}{_LIST_FALLBACK_PATH}/")
-    return _normalize_site_url(base_url or BASE_SITE)
-
-
-def _listing_path_and_query(base_url: str) -> tuple[str, dict[str, str]]:
-    parsed = urlparse(_resolve_listing_base(base_url))
-    path = (parsed.path or "/").rstrip("/")
-    if path in _HOMEPAGE_PATHS:
-        path = _LIST_FALLBACK_PATH.strip("/")
-    if re.search(r"/\d+/?$", path):
-        path = re.sub(r"/\d+/?$", "", path)
-    query_items = dict(parse_qsl(parsed.query, keep_blank_values=True))
-    query_items.pop("from", None)
-    query_items.pop("page", None)
-    return path, query_items
-
-
 def _build_list_page_url(base_url: str, page: int) -> str:
-    """Canonical page URL — prefers ?page=N (KVS) over /path/N/ (often 403 on CDN)."""
-    parsed = urlparse(_resolve_listing_base(base_url))
+    raw = (base_url or "").strip() or BASE_SITE
+    if not raw.startswith("http"):
+        raw = f"{BASE_SITE.rstrip('/')}/{raw.lstrip('/')}"
+    parsed = urlparse(raw)
     page_num = max(1, int(page) if page else 1)
-    path, query_items = _listing_path_and_query(base_url)
-    base_path = f"/{path}/" if path else "/"
+
+    path = (parsed.path or "/").rstrip("/") or ""
+    query_items = dict(parse_qsl(parsed.query, keep_blank_values=True))
 
     if page_num <= 1:
-        return _normalize_site_url(
-            urlunparse(
-                (
-                    parsed.scheme or "https",
-                    parsed.netloc or f"www.{SITE_HOST}",
-                    base_path,
-                    "",
-                    urlencode(query_items),
-                    "",
-                )
-            )
-        )
-
-    query_items = dict(query_items)
-    query_items["page"] = str(page_num)
-    return _normalize_site_url(
-        urlunparse(
+        new_path = path or "/"
+        return urlunparse(
             (
                 parsed.scheme or "https",
                 parsed.netloc or f"www.{SITE_HOST}",
-                base_path,
+                new_path + ("/" if new_path != "/" else "/"),
                 "",
                 urlencode(query_items),
                 "",
             )
         )
+
+    if re.search(r"/\d+/?$", path):
+        path = re.sub(r"/\d+/?$", "", path)
+
+    if "page" not in query_items:
+        new_path = f"{path}/{page_num}" if path else f"/{page_num}"
+        return urlunparse(
+            (
+                parsed.scheme or "https",
+                parsed.netloc or f"www.{SITE_HOST}",
+                new_path + "/",
+                "",
+                urlencode(query_items),
+                "",
+            )
+        )
+
+    query_items["page"] = str(page_num)
+    return urlunparse(
+        (
+            parsed.scheme or "https",
+            parsed.netloc or f"www.{SITE_HOST}",
+            path + "/" if path else "/",
+            "",
+            urlencode(query_items),
+            "",
+        )
     )
 
 
-def _list_page_candidates(base_url: str, page: int, *, per_page: int = _KVS_PAGE_SIZE) -> list[str]:
-    page_num = max(1, int(page) if page else 1)
-    if page_num <= 1:
-        return [_build_list_page_url(base_url, 1)]
-
-    parsed = urlparse(_resolve_listing_base(base_url))
-    path, query_items = _listing_path_and_query(base_url)
-    scheme = parsed.scheme or "https"
-    netloc = parsed.netloc or f"www.{SITE_HOST}"
-    base_path = f"/{path}/" if path else "/"
-    step = max(1, int(per_page) if per_page else _KVS_PAGE_SIZE)
-
-    out: list[str] = []
-    seen: set[str] = set()
-
-    def add(url: str) -> None:
-        normalized = _normalize_site_url(url)
-        if normalized not in seen:
-            seen.add(normalized)
-            out.append(normalized)
-
-    # Primary: ?page=N (KVS standard; avoids bare /2/ homepage trap)
-    q_page = dict(query_items)
-    q_page["page"] = str(page_num)
-    add(urlunparse((scheme, netloc, base_path, "", urlencode(q_page), "")))
-
-    # KVS offset pagination
-    q_from = dict(query_items)
-    q_from["from"] = str((page_num - 1) * step)
-    add(urlunparse((scheme, netloc, base_path, "", urlencode(q_from), "")))
-
-    # Path suffix fallbacks (site HTML pagination sometimes uses these)
-    root = base_path.rstrip("/")
-    add(urlunparse((scheme, netloc, f"{root}/{page_num}/", "", urlencode(query_items), "")))
-    add(urlunparse((scheme, netloc, f"{root}/{page_num:02d}/", "", urlencode(query_items), "")))
-
-    return out
-
-
-def _extract_pagination_url(html: str, listing_base: str, page_num: int) -> Optional[str]:
-    """Read the real page-N href from pagination on page 1."""
-    if not html or page_num < 2:
-        return None
-    soup = BeautifulSoup(html, "lxml")
-    labels = {str(page_num), f"{page_num:02d}", f"{page_num:03d}"}
-    for sel in (
-        ".pagination a",
-        ".paginator a",
-        ".pager a",
-        "ul.pagination li a",
-        "div.pagination li a",
-        ".pagination-holder a",
-    ):
-        for anchor in soup.select(sel):
-            text = (anchor.get_text(strip=True) or "").strip()
-            if text not in labels:
-                continue
-            href = (anchor.get("href") or "").strip()
-            if href and not href.startswith("#"):
-                return _normalize_site_url(urljoin(listing_base, href))
-
-    offset = (page_num - 1) * _KVS_PAGE_SIZE
-    for pattern in (
-        rf'href=["\']([^"\']+\?page={page_num}[^"\']*)["\']',
-        rf'href=["\']([^"\']+/{page_num}/?)["\']',
-        rf'href=["\']([^"\']+/{page_num:02d}/?)["\']',
-        rf'href=["\']([^"\']+\?from={offset}[^"\']*)["\']',
-    ):
-        m = re.search(pattern, html, re.IGNORECASE)
-        if m:
-            href = (m.group(1) or "").strip()
-            if href:
-                return _normalize_site_url(urljoin(listing_base, href))
-    return None
-
-
 async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[dict[str, Any]]:
-    page_num = max(1, int(page) if page else 1)
-    listing_base = _resolve_listing_base(base_url)
-    per_page = max(1, min(int(limit) if limit else _KVS_PAGE_SIZE, 64))
-    referer = _build_list_page_url(listing_base, max(1, page_num - 1))
-
-    candidates = _list_page_candidates(base_url, page_num, per_page=per_page)
-    if page_num > 1:
-        try:
-            page1_html = await fetch_page(
-                _build_list_page_url(listing_base, 1),
-                referer=listing_base,
-                retries=2,
-                quiet=True,
-            )
-            discovered = _extract_pagination_url(page1_html, listing_base, page_num)
-            if discovered and discovered not in candidates:
-                candidates.insert(0, discovered)
-        except Exception:
-            pass
-
-    html = ""
-    for idx, page_url in enumerate(candidates):
-        # Fail fast on alternate pagination URLs; full retries only on first candidate.
-        attempt_retries = 3 if idx == 0 else 1
-        try:
-            html = await fetch_page(
-                page_url,
-                referer=referer,
-                retries=attempt_retries,
-                quiet=True,
-            )
-            if html and _VIDEO_HREF_RE.search(html):
-                break
-            referer = page_url
-        except Exception:
-            referer = page_url
-            continue
-    if not html:
+    page_url = _build_list_page_url(base_url, page)
+    try:
+        html = await fetch_page(page_url, referer=base_url or BASE_SITE)
+    except Exception:
         return []
 
     soup = BeautifulSoup(html, "lxml")
