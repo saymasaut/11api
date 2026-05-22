@@ -570,7 +570,7 @@ EXPLORE_SOURCES = [
         searchUrlTemplate="https://www.porntrex.com/search/{query}/",
         sourceId="porntrex",
         disable=False,
-        pageSize=32,
+        pageSize=100,
     ),
     ExploreSourceResponse(
         baseUrl="https://desiporn.one/",
