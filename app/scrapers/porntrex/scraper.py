@@ -117,11 +117,13 @@ async def fetch_page(url: str, *, referer: str | None = None) -> str:
     clean_url = _sanitize_url(url)
     headers = _browser_headers(referer)
     timeout = aiohttp.ClientTimeout(total=45, connect=20, sock_read=30)
+    pool_err: Exception | None = None
 
     try:
         return await pool_fetch_html(clean_url, headers=headers, timeout=timeout)
-    except Exception as pool_err:
-        logger.warning("PornTrex pool fetch failed for %s: %s", clean_url, pool_err)
+    except Exception as exc:
+        pool_err = exc
+        logger.warning("PornTrex pool fetch failed for %s: %s", clean_url, exc)
 
     text = await _fetch_with_curl_cffi(clean_url, headers=headers)
     if text:
@@ -131,7 +133,9 @@ async def fetch_page(url: str, *, referer: str | None = None) -> str:
         return await _fetch_with_httpx(clean_url, headers=headers)
     except Exception as httpx_err:
         logger.warning("PornTrex httpx fetch failed for %s: %s", clean_url, httpx_err)
-        raise pool_err from httpx_err
+        if pool_err is not None:
+            raise pool_err from httpx_err
+        raise httpx_err
 
 
 def _first_non_empty(*values: Optional[str]) -> Optional[str]:
@@ -501,12 +505,24 @@ async def scrape(url: str) -> dict[str, Any]:
     return data
 
 
+def _normalize_list_path(path: str) -> str:
+    """Map legacy/wrong PornTrex list paths to URLs that exist on the site."""
+    p = (path or "").strip("/")
+    if not p:
+        return ""
+    if p == "most-viewed" or p.startswith("most-viewed/"):
+        p = "most-popular" + p[len("most-viewed") :]
+    if p == "category" or p.startswith("category/"):
+        p = "categories" + p[len("category") :]
+    return p
+
+
 def _normalize_list_base_url(base_url: str) -> str:
     raw = (base_url or "").strip() or BASE_SITE
     if not raw.startswith("http"):
         raw = urljoin(BASE_SITE, raw.lstrip("/"))
     parsed = urlparse(_sanitize_url(raw))
-    path = (parsed.path or "/").strip("/")
+    path = _normalize_list_path((parsed.path or "/").strip("/"))
     list_path = f"/{path}/" if path else "/"
     return urlunparse((parsed.scheme or "https", parsed.netloc or f"www.{SITE_HOST}", list_path, "", "", ""))
 
