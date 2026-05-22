@@ -2,29 +2,43 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
+import aiohttp
 import httpx
 from bs4 import BeautifulSoup
 
 from app.core.pool import fetch_html as pool_fetch_html
 
+logger = logging.getLogger(__name__)
+
 BASE_SITE = "https://www.porntrex.com/"
 SITE_HOST = "porntrex.com"
 SITE_ALIASES = frozenset({"porntrex.com", "www.porntrex.com"})
 
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
 _DEFAULT_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-    ),
+    "User-Agent": _USER_AGENT,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
     "Referer": BASE_SITE,
-    "Cookie": "age_pass=1",
+    "Cookie": "age_pass=1; PHPSESSID=1",
 }
 
 _VIDEO_PATH_RE = re.compile(r"^/video/(\d+)/[^/]+/?$", re.IGNORECASE)
@@ -56,10 +70,73 @@ def get_categories() -> list[dict]:
         return []
 
 
-async def fetch_page(url: str, *, referer: str | None = None) -> str:
+def _browser_headers(referer: str | None = None) -> dict[str, str]:
+    """Full browser-like headers on every PornTrex request (stable User-Agent)."""
     headers = dict(_DEFAULT_HEADERS)
+    headers["User-Agent"] = _USER_AGENT
     headers["Referer"] = referer or BASE_SITE
-    return await pool_fetch_html(url, headers=headers)
+    return headers
+
+
+def _sanitize_url(url: str) -> str:
+    parsed = urlparse((url or "").strip())
+    if not parsed.scheme:
+        parsed = urlparse(f"https://{url.lstrip('/')}")
+    path = parsed.path or "/"
+    while "//" in path:
+        path = path.replace("//", "/")
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return urlunparse((parsed.scheme or "https", parsed.netloc, path, parsed.params, parsed.query, parsed.fragment))
+
+
+async def _fetch_with_curl_cffi(url: str, *, headers: dict[str, str]) -> Optional[str]:
+    try:
+        from curl_cffi.requests import AsyncSession
+    except ImportError:
+        return None
+
+    for imp in ("chrome120", "chrome110", "safari15_3"):
+        try:
+            async with AsyncSession(impersonate=imp, headers=headers, timeout=45.0) as client:
+                resp = await client.get(_sanitize_url(url))
+                if resp.status_code == 200 and resp.text:
+                    return resp.text
+        except Exception:
+            continue
+    return None
+
+
+async def _fetch_with_httpx(url: str, *, headers: dict[str, str]) -> str:
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=httpx.Timeout(45.0, connect=20.0),
+        headers=headers,
+    ) as client:
+        resp = await client.get(_sanitize_url(url))
+        resp.raise_for_status()
+        return resp.text
+
+
+async def fetch_page(url: str, *, referer: str | None = None) -> str:
+    clean_url = _sanitize_url(url)
+    headers = _browser_headers(referer)
+    timeout = aiohttp.ClientTimeout(total=45, connect=20, sock_read=30)
+
+    try:
+        return await pool_fetch_html(clean_url, headers=headers, timeout=timeout)
+    except Exception as pool_err:
+        logger.warning("PornTrex pool fetch failed for %s: %s", clean_url, pool_err)
+
+    text = await _fetch_with_curl_cffi(clean_url, headers=headers)
+    if text:
+        return text
+
+    try:
+        return await _fetch_with_httpx(clean_url, headers=headers)
+    except Exception as httpx_err:
+        logger.warning("PornTrex httpx fetch failed for %s: %s", clean_url, httpx_err)
+        raise pool_err from httpx_err
 
 
 def _first_non_empty(*values: Optional[str]) -> Optional[str]:
@@ -405,8 +482,24 @@ def _parse_list_video_item(item: Any) -> Optional[dict[str, Any]]:
 
     container = _list_card_container(item)
     ctext = container.get_text(" ", strip=True) if hasattr(container, "get_text") else ""
-    duration = _extract_duration(ctext)
-    views = _extract_views(ctext)
+    duration = None
+    views = None
+    for sel in (".duration", ".time", ".video-duration", ".thumb-duration", ".item-duration"):
+        el = (item.select_one(sel) if hasattr(item, "select_one") else None) or (
+            container.select_one(sel) if hasattr(container, "select_one") else None
+        )
+        if el and not duration:
+            duration = _extract_duration(el.get_text(" ", strip=True))
+    if not duration:
+        duration = _extract_duration(ctext)
+    views_el = (
+        (item.select_one(".views") if hasattr(item, "select_one") else None)
+        or (container.select_one(".views") if hasattr(container, "select_one") else None)
+    )
+    if views_el:
+        views = _extract_views(views_el.get_text(" ", strip=True))
+    if not views:
+        views = _extract_views(ctext)
 
     return {
         "url": href,
@@ -549,13 +642,11 @@ def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str
 async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Optional[str]:
     base = get_file_url.split("?", 1)[0].strip().rstrip("/")
     ref = referer.strip() if referer.strip().startswith("http") else BASE_SITE
-    headers = {
-        "User-Agent": _DEFAULT_HEADERS["User-Agent"],
-        "Referer": ref,
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Cookie": _DEFAULT_HEADERS.get("Cookie", ""),
-    }
+    headers = _browser_headers(ref)
+    headers["Accept"] = "*/*"
+    headers["Sec-Fetch-Dest"] = "video"
+    headers["Sec-Fetch-Mode"] = "no-cors"
+    headers["Sec-Fetch-Site"] = "same-origin"
 
     async def _attempt(url: str, method: str, range_hdr: Optional[str]) -> Optional[str]:
         h = dict(headers)
@@ -758,65 +849,69 @@ async def scrape(url: str) -> dict[str, Any]:
     return data
 
 
-def _build_list_page_url(base_url: str, page: int) -> str:
+def _normalize_list_base_url(base_url: str) -> str:
     raw = (base_url or "").strip() or BASE_SITE
     if not raw.startswith("http"):
-        raw = f"{BASE_SITE.rstrip('/')}/{raw.lstrip('/')}"
-    parsed = urlparse(raw)
-    page_num = max(1, int(page) if page else 1)
+        raw = urljoin(BASE_SITE, raw.lstrip("/"))
+    parsed = urlparse(_sanitize_url(raw))
+    path = (parsed.path or "/").strip("/")
+    list_path = f"/{path}/" if path else "/"
+    return urlunparse((parsed.scheme or "https", parsed.netloc or f"www.{SITE_HOST}", list_path, "", "", ""))
 
-    path = (parsed.path or "/").rstrip("/") or ""
+
+def _build_list_page_url(base_url: str, page: int) -> str:
+    base = _normalize_list_base_url(base_url)
+    parsed = urlparse(base)
+    page_num = max(1, int(page) if page else 1)
+    path = (parsed.path or "/").strip("/")
     query_items = dict(parse_qsl(parsed.query, keep_blank_values=True))
 
     if page_num <= 1:
-        new_path = path or "/"
+        list_path = f"/{path}/" if path else "/"
         return urlunparse(
-            (
-                parsed.scheme or "https",
-                parsed.netloc or f"www.{SITE_HOST}",
-                new_path + ("/" if new_path != "/" else "/"),
-                "",
-                urlencode(query_items),
-                "",
-            )
+            (parsed.scheme or "https", parsed.netloc or f"www.{SITE_HOST}", list_path, "", urlencode(query_items), "")
         )
 
-    if re.search(r"/\d+/?$", path):
-        path = re.sub(r"/\d+/?$", "", path)
+    if path and re.search(r"/\d+$", f"/{path}"):
+        path = re.sub(r"/\d+$", "", path)
 
-    if "page" not in query_items:
-        new_path = f"{path}/{page_num}" if path else f"/{page_num}"
+    if "page" in query_items:
+        query_items["page"] = str(page_num)
+        list_path = f"/{path}/" if path else "/"
         return urlunparse(
-            (
-                parsed.scheme or "https",
-                parsed.netloc or f"www.{SITE_HOST}",
-                new_path + "/",
-                "",
-                urlencode(query_items),
-                "",
-            )
+            (parsed.scheme or "https", parsed.netloc or f"www.{SITE_HOST}", list_path, "", urlencode(query_items), "")
         )
 
-    query_items["page"] = str(page_num)
+    list_path = f"/{path}/{page_num}/" if path else f"/{page_num}/"
     return urlunparse(
-        (
-            parsed.scheme or "https",
-            parsed.netloc or f"www.{SITE_HOST}",
-            path + "/" if path else "/",
-            "",
-            urlencode(query_items),
-            "",
-        )
+        (parsed.scheme or "https", parsed.netloc or f"www.{SITE_HOST}", list_path, "", urlencode(query_items), "")
     )
 
 
-async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[dict[str, Any]]:
-    page_url = _build_list_page_url(base_url, page)
-    try:
-        html = await fetch_page(page_url, referer=base_url or BASE_SITE)
-    except Exception:
-        return []
+def _list_page_candidates(base_url: str, page: int) -> list[str]:
+    primary = _build_list_page_url(base_url, page)
+    candidates = [primary]
+    parsed = urlparse(_normalize_list_base_url(base_url))
+    path = (parsed.path or "/").strip("/")
+    if page <= 1 and path in ("", "latest-updates"):
+        for alt in (BASE_SITE, f"{BASE_SITE}latest-updates/"):
+            if alt not in candidates:
+                candidates.append(_sanitize_url(alt))
+    return candidates
 
+
+def _is_list_page_html(html: str) -> bool:
+    if not html or len(html) < 5000:
+        return False
+    if "adult website" in html.lower() and "data-item-id" not in html:
+        return False
+    return bool(
+        re.search(r'data-item-id=["\']\d+["\']', html)
+        or re.search(r'class=["\'][^"\']*video-item[^"\']*["\']', html, re.IGNORECASE)
+    )
+
+
+def _parse_list_html(html: str, *, limit: int) -> list[dict[str, Any]]:
     soup = BeautifulSoup(html, "lxml")
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -829,7 +924,9 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
         seen.add(href)
         items.append(entry)
 
-    for card in soup.select(".video-item[data-item-id], .thumb-item[data-item-id]"):
+    for card in soup.select(
+        ".video-item[data-item-id], .thumb-item[data-item-id], [data-item-id].video-item"
+    ):
         if len(items) >= effective_limit:
             break
         parsed = _parse_list_video_item(card)
@@ -841,7 +938,30 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
             if len(items) >= effective_limit:
                 break
             href = _normalize_video_href(a.get("href") or "")
-            if not href or href in seen:
+            if not href:
+                continue
+
+            if href in seen:
+                for i, existing in enumerate(items):
+                    if existing.get("url") != href:
+                        continue
+                    container = _list_card_container(a.find_parent(["article", "li", "div"]) or a)
+                    img = a.find("img") or (container.find("img") if container else None)
+                    title = _clean_list_title(
+                        _first_non_empty(
+                            a.get("title"),
+                            img.get("alt") if img else None,
+                            a.get_text(" ", strip=True),
+                        )
+                    )
+                    if title and title != "Unknown Video":
+                        existing["title"] = title
+                    thumb = _best_image_url(img)
+                    if thumb:
+                        existing["thumbnail_url"] = thumb
+                    ctext = container.get_text(" ", strip=True) if container else ""
+                    existing["duration"] = existing.get("duration") or _extract_duration(ctext)
+                    existing["views"] = existing.get("views") or _extract_views(ctext)
                 continue
 
             container = _list_card_container(a.find_parent(["article", "li", "div"]) or a)
@@ -890,6 +1010,32 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
             )
 
     return items[:effective_limit]
+
+
+async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[dict[str, Any]]:
+    referer = _normalize_list_base_url(base_url)
+    effective_limit = max(1, int(limit)) if limit else 100
+    last_error: Exception | None = None
+
+    for page_url in _list_page_candidates(base_url, page):
+        try:
+            html = await fetch_page(page_url, referer=referer)
+        except Exception as exc:
+            last_error = exc
+            logger.warning("PornTrex list fetch failed for %s: %s", page_url, exc)
+            continue
+
+        if not _is_list_page_html(html):
+            logger.warning("PornTrex list page invalid HTML from %s", page_url)
+            continue
+
+        items = _parse_list_html(html, limit=effective_limit)
+        if items:
+            return items
+
+    if last_error:
+        logger.error("PornTrex list_videos exhausted candidates for %s page %s: %s", base_url, page, last_error)
+    return []
 
 
 async def crawl_videos(
