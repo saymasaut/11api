@@ -264,7 +264,12 @@ async def create_scrape(request: Request, body: ScrapeRequestV1) -> ScrapeRespon
     """
     from app.config.settings import settings
     api_base = settings.BASE_URL or str(request.base_url)
-    cache_key = f"scrape:{str(body.url)}"
+    host = body.url.host or ""
+    cache_key = (
+        porntrex.scrape_cache_key(str(body.url))
+        if porntrex.can_handle(host)
+        else f"scrape:{str(body.url)}"
+    )
     cached_result = await cache.get(cache_key)
     if cached_result:
         logging.info(f"⚡ Cache HIT for scrape {body.url}")
@@ -296,20 +301,24 @@ async def list_videos(request: Request, base_url: str, page: int = 1, limit: int
     if page < 1: page = 1
     if limit < 1: limit = 1
     if limit > 200: limit = 200
-    
-    # Check cache (v2 optimization)
-    cache_key = f"list:{base_url}:p{page}:l{limit}"
-    cached_items = await cache.get(cache_key)
-    if cached_items:
-        logging.info(f"⚡ Cache HIT for list {base_url} page {page}")
-        return [ListItem(**it) for it in cached_items]
 
     host = ""
     try:
         parsed = HttpUrl(base_url)
         host = parsed.host or ""
-    except:
-        pass 
+    except Exception:
+        pass
+
+    # Check cache (v2 optimization) — use canonical keys for PornTrex
+    cache_key = (
+        porntrex.list_cache_key(base_url, page, limit)
+        if porntrex.can_handle(host)
+        else f"list:{base_url}:p{page}:l{limit}"
+    )
+    cached_items = await cache.get(cache_key)
+    if cached_items:
+        logging.info(f"⚡ Cache HIT for list {base_url} page {page}")
+        return [ListItem(**it) for it in cached_items]
 
     try:
         items = await _list_dispatch(base_url, host, page, limit)

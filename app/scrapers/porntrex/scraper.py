@@ -505,6 +505,9 @@ async def scrape(url: str) -> dict[str, Any]:
     return data
 
 
+_PAGINATED_SECTIONS = frozenset({"latest-updates", "top-rated", "most-popular"})
+
+
 def _normalize_list_path(path: str) -> str:
     """Map legacy/wrong PornTrex list paths to URLs that exist on the site."""
     p = (path or "").strip("/")
@@ -514,7 +517,27 @@ def _normalize_list_path(path: str) -> str:
         p = "most-popular" + p[len("most-viewed") :]
     if p == "category" or p.startswith("category/"):
         p = "categories" + p[len("category") :]
-    return p
+    parts = p.split("/")
+    if parts and parts[-1].isdigit():
+        if parts[0] == "categories" and len(parts) >= 3:
+            parts = parts[:-1]
+        elif len(parts) >= 2 and parts[-2] in _PAGINATED_SECTIONS:
+            parts = parts[:-1]
+        elif len(parts) == 2 and parts[0] in _PAGINATED_SECTIONS:
+            parts = parts[:-1]
+    return "/".join(parts)
+
+
+def list_cache_key(base_url: str, page: int, limit: int) -> str:
+    """Stable list cache key (canonical URL + page + limit)."""
+    canon = _normalize_list_base_url(base_url)
+    return f"list:porntrex:{canon}:p{max(1, int(page))}:l{max(1, int(limit))}"
+
+
+def scrape_cache_key(url: str) -> str:
+    """Stable scrape cache key (canonical video URL)."""
+    canon = _normalize_video_href(url) or _sanitize_url(url)
+    return f"scrape:porntrex:{canon}"
 
 
 def _normalize_list_base_url(base_url: str) -> str:
