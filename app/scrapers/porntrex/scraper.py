@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -46,13 +45,6 @@ _VIDEO_HREF_RE = re.compile(
     r'href=["\'](?:https?://(?:www\.)?porntrex\.com)?/video/(\d+)/([^"\']+)/?["\']',
     re.IGNORECASE,
 )
-_KT_URL_KEYS = r"(?:video_url|video_url_text|video_alt_url|video_alt_url2)"
-_KT_PATTERNS = [
-    rf"{_KT_URL_KEYS}\s*[:=]\s*'([^']+)'",
-    rf'{_KT_URL_KEYS}\s*[:=]\s*"([^"]+)"',
-]
-
-
 def can_handle(host: str) -> bool:
     h = (host or "").lower().split(":")[0]
     if h.startswith("www."):
@@ -290,132 +282,6 @@ def _normalize_video_href(href: str) -> Optional[str]:
     return _canonical_video_url(vid, slug)
 
 
-def _resolve_kt_url(raw: str, page_url: str) -> str:
-    raw = (raw or "").strip()
-    m = re.match(r"^function/\d+/(https?://.+)$", raw)
-    if m:
-        return m.group(1)
-    if raw.startswith("//"):
-        return f"https:{raw}"
-    if raw.startswith("/"):
-        return urljoin(page_url, raw)
-    return raw
-
-
-def _detect_media_format(url: str) -> Optional[str]:
-    low = (url or "").lower()
-    path = urlparse(url).path.lower() if url else ""
-    if "/get_file/" in low:
-        return "mp4"
-    if path.endswith(".m3u8"):
-        return "hls"
-    if path.endswith(".mp4"):
-        return "mp4"
-    if "/embed/" in low and SITE_HOST in low:
-        return "embed"
-    return None
-
-
-def _is_non_video_asset_url(url: str) -> bool:
-    low = (url or "").lower()
-    path = urlparse(url).path.lower() if url else ""
-    if path.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".svg")):
-        return True
-    blocked = (
-        "/screenshots/",
-        "/thumb/",
-        "/thumbs/",
-        "/thumbnails/",
-        "/poster/",
-        "/preview.jpg",
-        "cdntrex.com/contents/videos_screenshots",
-    )
-    return any(marker in low for marker in blocked)
-
-
-def _is_preview_media_url(url: str) -> bool:
-    path = urlparse(url).path.lower() if url else ""
-    return "_preview.mp4" in path or path.endswith("/preview.mp4")
-
-
-def _is_probable_ad_iframe(src: str) -> bool:
-    s = (src or "").lower()
-    blocked = (
-        "bongacams",
-        "adspyglass",
-        "doubleclick",
-        "googlesyndication",
-        "adservice",
-        "exoclick",
-        "trafficjunky",
-        "popads",
-        "theporndude",
-        "jerky",
-    )
-    return any(marker in s for marker in blocked)
-
-
-def _extract_inline_urls(html: str) -> list[str]:
-    unescaped = html.replace("\\/", "/").replace("\\u0026", "&")
-    urls: list[str] = []
-    for m in re.finditer(r"https?://[^\s\"'<>]+", unescaped, flags=re.IGNORECASE):
-        u = m.group(0).strip()
-        if u and _detect_media_format(u):
-            urls.append(u)
-    return list(dict.fromkeys(urls))
-
-
-def _extract_kt_player_urls(html: str, page_url: str) -> list[tuple[str, str]]:
-    """Return (key, resolved_url) pairs from kt_player config in inline scripts."""
-    found: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    quality_map = {
-        "video_url": "default",
-        "video_url_text": "default",
-        "video_alt_url": "alt",
-        "video_alt_url2": "alt2",
-    }
-    for pattern in _KT_PATTERNS:
-        for m in re.finditer(pattern, html):
-            raw = m.group(1).strip()
-            key_m = re.match(r"(\w+)", m.group(0))
-            key = key_m.group(1) if key_m else "video_url"
-            resolved = _resolve_kt_url(raw, page_url)
-            if not resolved.startswith("http"):
-                continue
-            if "get_file" not in resolved and not re.search(r"\.mp4|\.m3u8", resolved):
-                continue
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            found.append((quality_map.get(key, key), resolved))
-    return found
-
-
-def _stream_quality_from_url(url: str, *, label: str | None = None) -> str:
-    if label and label not in ("default", "alt", "alt2", "source"):
-        return label
-    low = (url or "").lower()
-    if _is_preview_media_url(url):
-        return "preview"
-    q = re.search(r"([1-9]\d{2,3})p", low)
-    if q:
-        return f"{q.group(1)}p"
-    if "_720p" in low or "720p" in low:
-        return "720p"
-    if "_1080p" in low or "1080p" in low:
-        return "1080p"
-    if "_2160p" in low or "2160p" in low or "_4k" in low:
-        return "2160p"
-    if "_360p" in low:
-        return "360p"
-    if "_480p" in low:
-        return "480p"
-    if _detect_media_format(url) == "hls":
-        return "adaptive"
-    return label or "source"
-
-
 def _embed_page_url(video_id: str) -> str:
     return f"https://www.porntrex.com/embed/{video_id}/"
 
@@ -511,235 +377,20 @@ def _parse_list_video_item(item: Any) -> Optional[dict[str, Any]]:
     }
 
 
-def _extract_native_embed_url(html: str, video_url: str) -> Optional[str]:
-    m = re.search(
-        r"https?://(?:www\.)?porntrex\.com/embed/\d+\b",
-        html,
-        flags=re.IGNORECASE,
-    )
-    if m:
-        return m.group(0).strip().rstrip("/") + "/"
-    vid = _extract_video_id(video_url)
-    if vid:
-        return f"https://www.porntrex.com/embed/{vid}/"
-    return None
+def _build_embed_video(video_url: str) -> dict[str, Any]:
+    """PornTrex direct /get_file/ links are unreliable; expose embed player only."""
+    video_id = _extract_video_id(video_url)
+    if not video_id:
+        return {"streams": [], "hls": None, "default": None, "has_video": False}
 
-
-def _extract_streams(soup: BeautifulSoup, html: str, video_url: str) -> dict[str, Any]:
-    streams: list[dict[str, str]] = []
-    seen: set[str] = set()
-
-    for label, src in _extract_kt_player_urls(html, video_url):
-        if src in seen:
-            continue
-        seen.add(src)
-        streams.append(
-            {
-                "url": src,
-                "quality": _stream_quality_from_url(src, label=label),
-                "format": _detect_media_format(src) or "mp4",
-            }
-        )
-
-    for a in soup.select("a[href]"):
-        href = (a.get("href") or "").strip()
-        if not href:
-            continue
-        if href.startswith("//"):
-            href = f"https:{href}"
-        elif href.startswith("/"):
-            href = urljoin(video_url, href)
-        if _is_non_video_asset_url(href) or _is_probable_ad_iframe(href):
-            continue
-        fmt = _detect_media_format(href)
-        if href.startswith("http") and href not in seen and fmt:
-            seen.add(href)
-            streams.append(
-                {
-                    "url": href,
-                    "quality": _stream_quality_from_url(href),
-                    "format": fmt,
-                }
-            )
-
-    for video in soup.select("video"):
-        for source in video.select("source[src]"):
-            src = (source.get("src") or "").strip()
-            if not src:
-                continue
-            if src.startswith("//"):
-                src = f"https:{src}"
-            elif src.startswith("/"):
-                src = urljoin(video_url, src)
-            if _is_non_video_asset_url(src):
-                continue
-            fmt = _detect_media_format(src)
-            if not src.startswith("http") or src in seen or not fmt:
-                continue
-            seen.add(src)
-            streams.append(
-                {
-                    "url": src,
-                    "quality": _stream_quality_from_url(src),
-                    "format": fmt,
-                }
-            )
-
-    for src in _extract_inline_urls(html):
-        if src in seen or _is_non_video_asset_url(src):
-            continue
-        fmt = _detect_media_format(src)
-        if not fmt:
-            continue
-        seen.add(src)
-        streams.append(
-            {
-                "url": src,
-                "quality": _stream_quality_from_url(src),
-                "format": fmt,
-            }
-        )
-
-    native_embed = _extract_native_embed_url(html, video_url)
-    if native_embed and native_embed not in seen:
-        seen.add(native_embed)
-        streams.append({"url": native_embed, "quality": "porntrex", "format": "embed"})
-
-    def _score(item: dict[str, str]) -> tuple[int, int]:
-        fmt = (item.get("format") or "").lower()
-        stream_url = item.get("url") or ""
-        qtxt = item.get("quality") or ""
-        q = re.search(r"(\d{3,4})", qtxt)
-        qnum = int(q.group(1)) if q else 0
-        if fmt == "mp4":
-            return (2, qnum) if _is_preview_media_url(stream_url) else (3, qnum)
-        if fmt == "hls":
-            return (2, qnum)
-        if fmt == "embed" and f"{SITE_HOST}/embed/" in stream_url.lower():
-            return (1, 1)
-        return (1, 0)
-
-    uniq = list(dict.fromkeys(json.dumps(s, sort_keys=True) for s in streams))
-    materialized = [json.loads(s) for s in uniq]
-    materialized.sort(key=_score, reverse=True)
-
-    default_url = None
-    for preferred in ("mp4", "hls", "embed"):
-        match = next((s for s in materialized if s.get("format") == preferred), None)
-        if match:
-            default_url = match.get("url")
-            break
-
-    hls_url = next((s.get("url") for s in materialized if s.get("format") == "hls"), None)
+    embed_url = _embed_page_url(video_id)
+    stream = {"url": embed_url, "quality": "embed", "format": "embed"}
     return {
-        "streams": materialized,
-        "hls": hls_url,
-        "default": default_url,
-        "has_video": bool(materialized),
+        "streams": [stream],
+        "hls": None,
+        "default": embed_url,
+        "has_video": True,
     }
-
-
-async def _get_file_to_remote_playable(get_file_url: str, *, referer: str) -> Optional[str]:
-    base = get_file_url.split("?", 1)[0].strip().rstrip("/")
-    ref = referer.strip() if referer.strip().startswith("http") else BASE_SITE
-    headers = _browser_headers(ref)
-    headers["Accept"] = "*/*"
-    headers["Sec-Fetch-Dest"] = "video"
-    headers["Sec-Fetch-Mode"] = "no-cors"
-    headers["Sec-Fetch-Site"] = "same-origin"
-
-    async def _attempt(url: str, method: str, range_hdr: Optional[str]) -> Optional[str]:
-        h = dict(headers)
-        if range_hdr:
-            h["Range"] = range_hdr
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
-            if method == "HEAD":
-                resp = await client.head(url, headers=h)
-            else:
-                resp = await client.get(url, headers=h)
-        if resp.status_code in (301, 302, 303, 307, 308):
-            loc = resp.headers.get("Location")
-            if not loc:
-                return None
-            if _is_non_video_asset_url(loc) or _is_probable_ad_iframe(loc):
-                return None
-            fmt = _detect_media_format(loc)
-            if fmt in ("mp4", "hls"):
-                return loc
-        return None
-
-    attempts = [
-        (f"{base}/", "HEAD", None),
-        (f"{base}/", "GET", "bytes=0-"),
-        (f"{base}/", "GET", "bytes=0-0"),
-        (base, "HEAD", None),
-        (base, "GET", "bytes=0-"),
-        (base, "GET", "bytes=0-0"),
-    ]
-    for u, method, rng in attempts:
-        try:
-            resolved = await asyncio.wait_for(_attempt(u, method, rng), timeout=16.0)
-            if resolved:
-                return resolved
-        except Exception:
-            continue
-    return None
-
-
-def _url_contains_video_id(url: str, video_id: str) -> bool:
-    low = (url or "").lower()
-    vid = str(video_id).lower()
-    return (
-        f"/{vid}/" in low
-        or f"/{vid}." in low
-        or f"{vid}.mp4" in low
-        or f"%2f{vid}%2f" in low
-    )
-
-
-async def _resolve_video_streams_to_remote_playable(video: dict[str, Any], *, referer: str) -> None:
-    streams: list[dict[str, str]] = video.get("streams") or []
-    get_file_mp4 = [
-        s for s in streams if s.get("format") == "mp4" and "get_file" in (s.get("url") or "")
-    ]
-    if not get_file_mp4:
-        return
-    video_id = _extract_video_id(referer)
-
-    async def _resolve_one(stream: dict[str, str]) -> tuple[dict[str, str], Optional[str]]:
-        resolved = await _get_file_to_remote_playable(stream["url"], referer=referer)
-        return stream, resolved
-
-    resolved_pairs = await asyncio.gather(*[_resolve_one(s) for s in get_file_mp4])
-    for stream, resolved in resolved_pairs:
-        if resolved:
-            if video_id and not _url_contains_video_id(resolved, video_id):
-                streams.remove(stream)
-                continue
-            stream["url"] = resolved
-        else:
-            # Keep original /get_file/ URL (playable with Referer header).
-            pass
-
-    direct_mp4 = [
-        s for s in streams if s.get("format") == "mp4" and "get_file" not in (s.get("url") or "")
-    ]
-    hls = next((s for s in streams if s.get("format") == "hls"), None)
-    embed = next((s for s in streams if s.get("format") == "embed"), None)
-
-    if direct_mp4:
-        video["default"] = direct_mp4[0]["url"]
-    elif get_file_mp4:
-        video["default"] = get_file_mp4[0]["url"]
-    elif hls:
-        video["default"] = hls["url"]
-    elif embed:
-        video["default"] = embed["url"]
-    else:
-        video["default"] = None
-
-    video["hls"] = hls["url"] if hls else None
-    video["has_video"] = bool(streams)
 
 
 def parse_video_page(html: str, url: str) -> dict[str, Any]:
@@ -795,7 +446,7 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
             _meta(soup, prop="article:published_time"),
             _meta(soup, prop="article:modified_time"),
         ),
-        "video": _extract_streams(soup, html, canon),
+        "video": _build_embed_video(canon),
         "related_videos": [],
         "preview_url": None,
     }
@@ -814,38 +465,27 @@ async def scrape(url: str) -> dict[str, Any]:
     html = await fetch_page(canon, referer=canon)
     data = parse_video_page(html, canon)
 
-    embed_html: str | None = None
+    data["video"] = _build_embed_video(canon)
+
     if video_id:
         try:
             embed_html = await _fetch_embed_html(video_id, referer=canon)
-        except Exception:
-            embed_html = None
-
-    if embed_html:
-        embed_soup = BeautifulSoup(embed_html, "lxml")
-        embed_video = _extract_streams(embed_soup, embed_html, canon)
-        main_video = data.get("video") or {}
-        main_has_playable = any(
-            s.get("format") in ("mp4", "hls")
-            and "get_file" in (s.get("url") or "")
-            for s in (main_video.get("streams") or [])
-        )
-        if embed_video.get("has_video") and not main_has_playable:
-            data["video"] = embed_video
-
-        if not _is_video_detail_page(html, video_id):
+            embed_soup = BeautifulSoup(embed_html, "lxml")
             embed_title = _clean_title(
                 embed_soup.title.get_text(strip=True) if embed_soup.title else None
             )
             if embed_title:
                 data["title"] = embed_title
-            slug_title = _clean_title(
-                (urlparse(canon).path or "").strip("/").split("/")[-1].replace("-", " ")
-            )
-            if slug_title and (not data.get("title") or data.get("title") == "Unknown Video"):
-                data["title"] = slug_title
+        except Exception:
+            pass
 
-    await _resolve_video_streams_to_remote_playable(data.get("video", {}), referer=canon)
+    if video_id and not _is_video_detail_page(html, video_id):
+        slug_title = _clean_title(
+            (urlparse(canon).path or "").strip("/").split("/")[-1].replace("-", " ")
+        )
+        if slug_title and (not data.get("title") or data.get("title") == "Unknown Video"):
+            data["title"] = slug_title
+
     return data
 
 
