@@ -105,9 +105,20 @@ def _browser_headers(*, referer: str | None = None, accept: str | None = None) -
     return headers
 
 
-async def fetch_page(url: str, *, referer: str | None = None) -> str:
+async def fetch_page(
+    url: str,
+    *,
+    referer: str | None = None,
+    retries: int = 3,
+    quiet: bool = False,
+) -> str:
     target = _normalize_site_url(url)
-    return await pool_fetch_html(target, headers=_browser_headers(referer=referer))
+    return await pool_fetch_html(
+        target,
+        headers=_browser_headers(referer=referer),
+        retries=retries,
+        quiet=quiet,
+    )
 
 
 def _first_non_empty(*values: Optional[str]) -> Optional[str]:
@@ -753,7 +764,7 @@ def parse_video_page(html: str, url: str) -> dict[str, Any]:
 
 
 async def _fetch_embed_html(video_id: str, *, referer: str) -> str:
-    return await fetch_page(_embed_page_url(video_id), referer=referer)
+    return await fetch_page(_embed_page_url(video_id), referer=referer, retries=3, quiet=False)
 
 
 async def scrape(url: str) -> dict[str, Any]:
@@ -762,7 +773,10 @@ async def scrape(url: str) -> dict[str, Any]:
         raise ValueError(f"Unsupported PornTrex URL: {url}")
 
     video_id = _extract_video_id(canon)
-    html = await fetch_page(canon, referer=canon)
+    try:
+        html = await fetch_page(canon, referer=canon, retries=2, quiet=True)
+    except Exception:
+        html = ""
     data = parse_video_page(html, canon)
 
     embed_html: str | None = None
@@ -947,7 +961,12 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
     candidates = _list_page_candidates(base_url, page_num, per_page=per_page)
     if page_num > 1:
         try:
-            page1_html = await fetch_page(_build_list_page_url(listing_base, 1), referer=listing_base)
+            page1_html = await fetch_page(
+                _build_list_page_url(listing_base, 1),
+                referer=listing_base,
+                retries=2,
+                quiet=True,
+            )
             discovered = _extract_pagination_url(page1_html, listing_base, page_num)
             if discovered and discovered not in candidates:
                 candidates.insert(0, discovered)
@@ -955,9 +974,16 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
             pass
 
     html = ""
-    for page_url in candidates:
+    for idx, page_url in enumerate(candidates):
+        # Fail fast on alternate pagination URLs; full retries only on first candidate.
+        attempt_retries = 3 if idx == 0 else 1
         try:
-            html = await fetch_page(page_url, referer=referer)
+            html = await fetch_page(
+                page_url,
+                referer=referer,
+                retries=attempt_retries,
+                quiet=True,
+            )
             if html and _VIDEO_HREF_RE.search(html):
                 break
             referer = page_url
