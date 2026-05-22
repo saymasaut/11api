@@ -114,11 +114,13 @@ async def fetch_page(url: str, *, referer: str | None = None) -> str:
     clean_url = _sanitize_url(url)
     headers = _browser_headers(referer)
     timeout = aiohttp.ClientTimeout(total=45, connect=20, sock_read=30)
+    last_error: Exception | None = None
 
     try:
         return await pool_fetch_html(clean_url, headers=headers, timeout=timeout)
-    except Exception as pool_err:
-        logger.warning("PornTrex pool fetch failed for %s: %s", clean_url, pool_err)
+    except Exception as exc:
+        last_error = exc
+        logger.warning("PornTrex pool fetch failed for %s: %s", clean_url, exc)
 
     text = await _fetch_with_curl_cffi(clean_url, headers=headers)
     if text:
@@ -126,9 +128,11 @@ async def fetch_page(url: str, *, referer: str | None = None) -> str:
 
     try:
         return await _fetch_with_httpx(clean_url, headers=headers)
-    except Exception as httpx_err:
-        logger.warning("PornTrex httpx fetch failed for %s: %s", clean_url, httpx_err)
-        raise pool_err from httpx_err
+    except Exception as exc:
+        last_error = exc
+        logger.warning("PornTrex httpx fetch failed for %s: %s", clean_url, exc)
+
+    raise last_error or RuntimeError(f"Failed to fetch {clean_url}")
 
 
 def _first_non_empty(*values: Optional[str]) -> Optional[str]:
@@ -246,8 +250,39 @@ def _best_image_url(img: Any) -> Optional[str]:
 
 
 def _extract_video_id(url: str) -> Optional[str]:
-    m = re.search(r"/video/(\d+)/", url or "", flags=re.IGNORECASE)
+    text = url or ""
+    m = re.search(r"/video/(\d+)", text, flags=re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(r"/embed/(\d+)", text, flags=re.IGNORECASE)
     return m.group(1) if m else None
+
+
+def normalize_video_url(url: str) -> Optional[str]:
+    """Accept watch or embed URLs; return canonical /video/{id}/… page URL."""
+    href = (url or "").strip()
+    if not href:
+        return None
+    if href.startswith("//"):
+        href = f"https:{href}"
+    elif href.startswith("/"):
+        href = f"https://www.porntrex.com{href}"
+
+    parsed = urlparse(href)
+    host = (parsed.netloc or "").lower()
+    if SITE_HOST not in host and not host.endswith(".porntrex.com"):
+        return None
+
+    canon = _normalize_video_href(href)
+    if canon:
+        return canon
+
+    vid = _extract_video_id(href)
+    if not vid:
+        return None
+    if re.search(r"/embed/\d+", href, re.IGNORECASE):
+        return _embed_page_url(vid)
+    return _canonical_video_url(vid, None)
 
 
 def _canonical_video_url(video_id: str, slug: str | None = None) -> str:
@@ -457,15 +492,26 @@ async def _fetch_embed_html(video_id: str, *, referer: str) -> str:
 
 
 async def scrape(url: str) -> dict[str, Any]:
-    canon = _normalize_video_href(url)
+    canon = normalize_video_url(url)
     if not canon:
         raise ValueError(f"Unsupported PornTrex URL: {url}")
 
     video_id = _extract_video_id(canon)
-    html = await fetch_page(canon, referer=canon)
-    data = parse_video_page(html, canon)
-
-    data["video"] = _build_embed_video(canon)
+    data: dict[str, Any] = {
+        "url": canon,
+        "title": "Unknown Video",
+        "description": None,
+        "thumbnail_url": None,
+        "duration": None,
+        "views": None,
+        "uploader_name": None,
+        "category": None,
+        "tags": None,
+        "upload_date": None,
+        "video": _build_embed_video(canon),
+        "related_videos": [],
+        "preview_url": None,
+    }
 
     if video_id:
         try:
@@ -476,16 +522,44 @@ async def scrape(url: str) -> dict[str, Any]:
             )
             if embed_title:
                 data["title"] = embed_title
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("PornTrex embed page fetch failed for %s: %s", canon, exc)
 
-    if video_id and not _is_video_detail_page(html, video_id):
-        slug_title = _clean_title(
-            (urlparse(canon).path or "").strip("/").split("/")[-1].replace("-", " ")
-        )
-        if slug_title and (not data.get("title") or data.get("title") == "Unknown Video"):
-            data["title"] = slug_title
+    is_embed_page = "/embed/" in canon
+    if not is_embed_page:
+        try:
+            html = await fetch_page(canon, referer=canon)
+            page_data = parse_video_page(html, canon)
+            for key in (
+                "title",
+                "description",
+                "thumbnail_url",
+                "duration",
+                "views",
+                "uploader_name",
+                "category",
+                "tags",
+                "upload_date",
+            ):
+                val = page_data.get(key)
+                if val is not None and val != "" and val != []:
+                    data[key] = val
+            if video_id and not _is_video_detail_page(html, video_id):
+                slug_title = _clean_title(
+                    (urlparse(canon).path or "").strip("/").split("/")[-1].replace("-", " ")
+                )
+                if slug_title and (not data.get("title") or data.get("title") == "Unknown Video"):
+                    data["title"] = slug_title
+        except Exception as exc:
+            logger.warning("PornTrex video page fetch failed for %s: %s", canon, exc)
+            if video_id and (not data.get("title") or data.get("title") == "Unknown Video"):
+                slug_title = _clean_title(
+                    (urlparse(canon).path or "").strip("/").split("/")[-1].replace("-", " ")
+                )
+                if slug_title:
+                    data["title"] = slug_title
 
+    data["video"] = _build_embed_video(canon)
     return data
 
 
