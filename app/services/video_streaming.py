@@ -29,27 +29,9 @@ def _quality_labels_match(stream_quality: Optional[str], requested: str) -> bool
     rq = _normalize_quality_label(requested)
     if sq == rq:
         return True
-    if sq == "embed" and rq in ("embed", "default", "source", "unknown"):
-        return True
-    if rq == "embed" and sq in ("embed", "default", "source", "unknown"):
-        return True
     sq_base = re.sub(r"[_-]?(hd|sd|uhd|4k)$", "", sq, flags=re.IGNORECASE)
     rq_base = re.sub(r"[_-]?(hd|sd|uhd|4k)$", "", rq, flags=re.IGNORECASE)
     return sq_base == rq_base
-
-
-def _normalize_stream_request_url(url: str) -> str:
-    """Rewrite provider-specific URLs (e.g. embed) to canonical page URLs before scrape."""
-    from urllib.parse import urlparse
-
-    host = (urlparse(url).netloc or "").lower()
-    if "porntrex.com" in host:
-        from app.scrapers.porntrex import normalize_video_url
-
-        canon = normalize_video_url(url)
-        if canon:
-            return canon
-    return url
 
 
 async def get_video_info(url: str, api_base_url: str = "http://localhost:8000") -> dict:
@@ -70,8 +52,6 @@ async def get_video_info(url: str, api_base_url: str = "http://localhost:8000") 
     from app.api.endpoints import thumbnails
     from urllib.parse import urlparse
     
-    url = _normalize_stream_request_url(url)
-
     # Parse URL to get host
     parsed = urlparse(url)
     host = parsed.netloc
@@ -277,7 +257,6 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
     # But usually this is called by endpoint which calls get_video_info first.
     # Refactoring: we'll just call get_video_info here too.
     # Using default localhost for this low-level helper as it returns raw data
-    url = _normalize_stream_request_url(url)
     info = await get_video_info(url, api_base_url=api_base_url)
     video_data = info["video"]
     streams = video_data.get("streams", [])
@@ -336,11 +315,6 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
         "quality": selected_quality,
         "format": fmt,
     }
-
-    if fmt == "embed":
-        response["embed"] = stream_url
-        response["embed_format"] = "embed"
-        response["playable"] = True
     
     # Add available_qualities for Pornhub, YouPorn, and RedTube
     from urllib.parse import urlparse
