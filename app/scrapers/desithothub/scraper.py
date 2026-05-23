@@ -47,23 +47,10 @@ _EMBED_HOST_MARKERS = (
     "vinovo.to",
     "gofile.io",
     "upfiles.com",
-    "dood",
-    "mixdrop",
-    "upstream",
-    "embed",
-    "player",
 )
 
 _POST_PAGE_RE = re.compile(
     r"^https?://(?:www\.)?desithothub\.com/(?P<slug>[a-z0-9][a-z0-9-]*)/?$",
-    re.IGNORECASE,
-)
-_MP4_RE = re.compile(
-    r"https?://[^\s\"'<>]+\.mp4(?:\?[^\s\"'<>]*)?",
-    re.IGNORECASE,
-)
-_M3U8_RE = re.compile(
-    r"https?://[^\s\"'<>]+\.m3u8(?:\?[^\s\"'<>]*)?",
     re.IGNORECASE,
 )
 
@@ -208,99 +195,138 @@ def _decode_media_url(url: str) -> str:
     return html_lib.unescape((url or "").strip())
 
 
-def _quality_from_url(url: str) -> str:
-    low = (url or "").lower()
-    for marker in _EMBED_HOST_MARKERS:
-        if marker in low:
-            return marker.replace(".com", "").replace(".", "_")
-    host = (urlparse(url).netloc or "").lower().replace("www.", "")
-    if host:
-        return host.split(".")[0]
-    return "source"
+def _quality_from_label(label: str) -> str:
+    clean = re.sub(r"[^a-z0-9]+", "_", (label or "").lower()).strip("_")
+    return clean or "embed"
 
 
-def _is_preview_url(url: str) -> bool:
-    low = (url or "").lower()
-    return "preview" in low or "_preview" in low or ("/thumb" in low and ".mp4" in low)
+def _normalize_embed_url(url: str) -> Optional[str]:
+    raw = _decode_media_url(url)
+    if not raw.startswith("http"):
+        if raw.startswith("//"):
+            raw = f"https:{raw}"
+        else:
+            return None
+    return raw
 
 
-def _streams_from_html(html: str) -> dict[str, Any]:
-    html_norm = html_lib.unescape(html.replace("\\/", "/").replace("\\u0026", "&"))
+def _to_embed_url(url: str) -> Optional[str]:
+    """Convert provider watch/share URLs to embed-friendly URLs."""
+    raw = _normalize_embed_url(url)
+    if not raw:
+        return None
+    low = raw.lower()
+    parsed = urlparse(raw)
+    host = (parsed.netloc or "").lower().replace("www.", "")
+    path = parsed.path or ""
+
+    if "sendvid.com" in host:
+        if "/embed/" in low:
+            return raw
+        parts = [p for p in path.strip("/").split("/") if p]
+        if parts:
+            return f"https://sendvid.com/embed/{parts[-1]}"
+
+    if "streamtape.com" in host:
+        if "/e/" in low:
+            return re.sub(r"\.mp4(?:\?.*)?$", "", raw, flags=re.I)
+        m = re.search(r"/v/([^/]+)", path, re.I)
+        if m:
+            return f"https://streamtape.com/e/{m.group(1)}/"
+
+    if "lulustream.com" in host or "luluvid.com" in host:
+        if "/e/" in low or "/embed/" in low:
+            return raw
+        parts = [p for p in path.strip("/").split("/") if p]
+        if parts:
+            return f"https://{host}/e/{parts[-1]}"
+
+    if "vinovo.to" in host:
+        if "/embed" in low or "/e/" in low:
+            return raw
+        m = re.search(r"/d/([^/]+)", path, re.I)
+        if m:
+            return f"https://vinovo.to/embed/{m.group(1)}"
+
+    if "vidara.to" in host:
+        if "/e/" in low or "/embed/" in low:
+            return raw
+        m = re.search(r"/v/([^/]+)", path, re.I)
+        if m:
+            return f"https://vidara.to/e/{m.group(1)}"
+
+    # GoFile, VikingFile, Upfiles: no reliable public embed path — use page URL in WebView.
+    return raw
+
+
+def _embed_streams_from_page(html: str) -> dict[str, Any]:
+    soup = BeautifulSoup(html_lib.unescape(html), "lxml")
     streams: list[dict[str, str]] = []
     seen: set[str] = set()
-    hls_url: Optional[str] = None
 
-    soup = BeautifulSoup(html_norm, "lxml")
-    for source in soup.select("video source[src], video[src]"):
-        raw = source.get("src")
-        if not raw:
-            continue
-        url = _decode_media_url(raw)
-        if not url.startswith("http") or url in seen or _is_preview_url(url):
-            continue
-        fmt = "hls" if ".m3u8" in url.lower() else "mp4"
-        seen.add(url)
-        streams.append(
-            {"url": url, "quality": _quality_from_url(url), "format": fmt}
-        )
-        if fmt == "hls" and not hls_url:
-            hls_url = url
+    server_buttons = soup.select("button.srv-drop-item")
+    video_units = soup.select("div.video-unit")
 
-    for pat, fmt in ((_M3U8_RE, "hls"), (_MP4_RE, "mp4")):
-        for raw in pat.findall(html_norm):
-            url = _decode_media_url(raw.strip().rstrip("/"))
-            if not url.startswith("http") or url in seen or _is_preview_url(url):
+    for idx, btn in enumerate(server_buttons):
+        label = btn.get_text(strip=True) or f"Server {idx + 1}"
+        unit = video_units[idx] if idx < len(video_units) else None
+        embed_url: Optional[str] = None
+
+        if unit:
+            iframe = unit.select_one("iframe.vid-max-iframe[src], iframe[src]")
+            if iframe and iframe.get("src"):
+                embed_url = _to_embed_url(str(iframe.get("src")))
+            else:
+                link = unit.select_one("a.vid-maxwrap[href]")
+                if link and link.get("href"):
+                    embed_url = _to_embed_url(str(link.get("href")))
+
+        if not embed_url:
+            continue
+        if embed_url in seen:
+            continue
+        seen.add(embed_url)
+        streams.append({"url": embed_url, "quality": _quality_from_label(label), "format": "embed"})
+
+    if not streams:
+        for iframe in soup.select("iframe.vid-max-iframe[src], .video-player iframe[src]"):
+            src = _normalize_embed_url(str(iframe.get("src") or ""))
+            if not src or src in seen:
                 continue
-            seen.add(url)
-            streams.append(
-                {"url": url, "quality": _quality_from_url(url), "format": fmt}
-            )
-            if fmt == "hls" and not hls_url:
-                hls_url = url
+            if not any(m in src.lower() for m in _EMBED_HOST_MARKERS):
+                continue
+            embed_url = _to_embed_url(src) or src
+            seen.add(embed_url)
+            streams.append({"url": embed_url, "quality": "sendvid", "format": "embed"})
 
-    default = hls_url or (streams[0]["url"] if streams else None)
+    if not streams:
+        for prop in ("og:video:url", "og:video", "og:video:secure_url"):
+            meta_url = _normalize_embed_url(_meta(soup, prop=prop) or "")
+            if not meta_url or meta_url in seen:
+                continue
+            if not any(m in meta_url.lower() for m in _EMBED_HOST_MARKERS):
+                continue
+            embed_url = _to_embed_url(meta_url) or meta_url
+            seen.add(embed_url)
+            streams.append(
+                {"url": embed_url, "quality": _quality_from_label("Sendvid"), "format": "embed"},
+            )
+
+    default = None
+    for pref in ("sendvid", "streamtape", "lulustream", "luluvid", "vinovo", "vidara", "gofile"):
+        match = next((s for s in streams if pref in (s.get("quality") or "").lower()), None)
+        if match:
+            default = match.get("url")
+            break
+    if not default and streams:
+        default = streams[0]["url"]
+
     return {
         "streams": streams,
-        "hls": hls_url,
+        "hls": None,
         "default": default,
         "has_video": bool(streams),
     }
-
-
-async def _streams_for_page(html: str, page_url: str) -> dict[str, Any]:
-    video_data = _streams_from_html(html)
-    if video_data.get("has_video"):
-        return video_data
-
-    soup = BeautifulSoup(html, "lxml")
-    for iframe in soup.select("iframe[src]"):
-        src = str(iframe.get("src") or "").strip()
-        if not src:
-            continue
-        if src.startswith("//"):
-            src = f"https:{src}"
-        elif src.startswith("/"):
-            src = f"{BASE_SITE.rstrip('/')}{src}"
-        if not src.startswith("http"):
-            continue
-        if not any(m in src.lower() for m in _EMBED_HOST_MARKERS):
-            continue
-        try:
-            player_html = await fetch_page(src, referer=page_url)
-            nested = _streams_from_html(player_html)
-            if nested.get("streams"):
-                return nested
-        except Exception:
-            continue
-        streams = [{"url": src, "quality": _quality_from_url(src), "format": "embed"}]
-        return {
-            "streams": streams,
-            "hls": None,
-            "default": src,
-            "has_video": True,
-        }
-
-    return video_data
 
 
 def _parse_list_items(soup: BeautifulSoup, *, limit: int) -> list[dict[str, Any]]:
@@ -479,7 +505,7 @@ async def scrape(url: str) -> dict[str, Any]:
         raise ValueError(f"Unsupported DesiThotHub URL: {url}")
 
     html = await fetch_page(canon, referer=BASE_SITE)
-    video_data = await _streams_for_page(html, canon)
+    video_data = _embed_streams_from_page(html)
     return parse_video_page(html, canon, video=video_data)
 
 

@@ -2976,7 +2976,7 @@ curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://ulluwebseries.one/h
 
 ## DesiThotHub (desithothub.com) Implementation Notes
 
-[DesiThotHub](https://desithothub.com/) is a custom WordPress-style site for desi live/cam and MMS-style videos. Posts use a single root-level slug (`/{slug}/`). Listing uses `div.thumb` cards with `a.card`, `h2.card-title`, `img`, and `span.time-ago`. Streams are usually **MP4** URLs from third-party hosts (`streamtape.com`, `sendvid.com`, `lulustream.com`, etc.) in page HTML, with iframe embed fetch fallback.
+[DesiThotHub](https://desithothub.com/) is a custom WordPress-style site for desi live/cam and MMS-style videos. Posts use a single root-level slug (`/{slug}/`). Listing uses `div.thumb` cards with `a.card`, `h2.card-title`, `img`, and `span.time-ago`. Playback uses a **server dropdown** (`button.srv-drop-item`) with one `div.video-unit` per host — only **embed** streams are returned (no direct `.mp4` extraction).
 
 ### Host aliases
 
@@ -2995,7 +2995,11 @@ curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://ulluwebseries.one/h
 
 - Canonical post URL: `https://desithothub.com/{slug}/` (single hyphenated slug segment)
 - Reject reserved paths: `categories`, `popular`, `newest`, `tags`, `favourites`, `page`, etc.
-- Streams: regex `.mp4` / `.m3u8` from post HTML; if none, fetch known embed iframes (`sendvid.com`, `streamtape.com`, `lulustream.com`, etc.) and retry; last resort `format: embed` on iframe `src`
+- Streams: parse `button.srv-drop-item` labels paired with `div.video-unit` entries
+  - Sendvid: `iframe.vid-max-iframe` `src` (e.g. `https://sendvid.com/embed/{id}`)
+  - Other hosts: `a.vid-maxwrap[href]` watch URLs converted to embed where possible (`streamtape.com/v/…` → `/e/…`, `lulustream.com/…` → `/e/…`, `vinovo.to/d/…` → `/embed/…`, etc.); GoFile/VikingFile/Upfiles use page URL with `format: embed`
+- All stream entries use `format: "embed"` only — do not regex-extract direct MP4 links from HTML
+- Default stream prefers Sendvid embed
 - Title/thumb from `og:title`, `og:image`, `h1`/`h2`
 
 ### Categories (`get_categories`)
