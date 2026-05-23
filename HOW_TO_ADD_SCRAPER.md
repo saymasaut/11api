@@ -2907,6 +2907,73 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=zmaal"
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://zmaal.net/pastry-episode-1/"
 ```
 
+## Ullu Web Series (ulluwebseries.one) Implementation Notes
+
+[ulluwebseries.one](https://ulluwebseries.one/) is a WordPress site (Astra + Content Views grid) for ULLU and other Hindi uncut OTT web series. Video posts live under `/hot-series/{slug}/`. The home page and taxonomy archives use **Content Views** cards (`div.pt-cv-content-item`) with thumb link, `h4.pt-cv-title`, and `images.ulluwebseries.one` thumbnails. Streams are direct **MP4** on `cdn.ulluwebseries.one` via `<video><source>` or HTML regex.
+
+### Host aliases
+
+- `ulluwebseries.one`
+- `www.ulluwebseries.one`
+
+### Listing and pagination (`list_videos`)
+
+- Home: `https://ulluwebseries.one/`
+- Indexes: `/categories/`, `/series/`, `/models/`, `/audio-sex-story/`
+- OTT filters: `/series_category/{slug}/` (e.g. `/series_category/ullu/`, `/series_category/moodx/`)
+- Parse `div.pt-cv-content-item` → `a.pt-cv-href-thumbnail` / `h4.pt-cv-title a`; thumb `img.pt-cv-thumbnail`
+- Pagination: WordPress `/page/{n}/` (e.g. `https://ulluwebseries.one/page/2/`)
+
+### Metadata and streams (`scrape`)
+
+- Canonical watch URL: `https://ulluwebseries.one/hot-series/{slug}/`
+- Reject non-video paths (`/series/`, `/categories/`, `/models/`, etc.) — only `/hot-series/` posts are scraped
+- Streams: `<video><source src="...">` and regex `.mp4` / `.m3u8` on `cdn.ulluwebseries.one`
+- Title/thumb from `og:title`, `og:image`, `h2`, `<title>`
+
+### Categories (`get_categories`)
+
+Home, Categories, Series, Models, Audio Sex Story, plus OTT `series_category` links (ULLU, MoodX, HotHit, etc.) in `categories.json`.
+
+### Registration checklist for ulluwebseries.one
+
+Besides creating `backend/app/scrapers/ulluwebseries/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=ulluwebseries` or `source=ulluws`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `ulluwebseries.one`, `cdn.ulluwebseries.one`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="ulluwebseries"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### Ullu Web Series verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://ulluwebseries.one/hot-series/boss-malayalam-uncut-web-series-boomex-2025/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://ulluwebseries.one/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://ulluwebseries.one/series_category/ullu/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=ulluwebseries"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://ulluwebseries.one/hot-series/tu-haan-kar-ya-naa-kar-ullu-web-series-e06/"
+```
+
 ## Eporner (eporner.com) Implementation Notes
 
 [Eporner](https://www.eporner.com/) is a large tube site with mandatory age verification in some regions. Video pages use alphanumeric IDs under `/video-{id}/{slug}/` (legacy `/hd-porn/{id}/{slug}/`). **Embed player URLs** (`/embed/{id}/`, used in iframes) are first-class scrape targets and always expose an `format: "embed"` stream for WebView/iframe playback. Streams are resolved via the site XHR API (hash from page HTML), with fallbacks to the public v2 metadata API and HTML `<source>` / MP4 regex extraction.

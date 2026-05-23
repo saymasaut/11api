@@ -1,0 +1,8 @@
+[
+  { "id": "home", "name": "Home", "url": "https://ulluwebseries.one/" },
+  { "id": "ullu", "name": "ULLU", "url": "https://ulluwebseries.one/series_category/ullu/" },
+  { "id": "moodx", "name": "MoodX", "url": "https://ulluwebseries.one/series_category/moodx/" },
+  { "id": "hothit", "name": "HotHit", "url": "https://ulluwebseries.one/series_category/hothit/" },
+  { "id": "boomex", "name": "Boomex", "url": "https://ulluwebseries.one/series_category/boomex/" },
+  { "id": "altt", "name": "ALTT", "url": "https://ulluwebseries.one/series_category/altt/" }
+]
