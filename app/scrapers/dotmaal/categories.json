@@ -1,9 +1,5 @@
 [
   { "id": "home", "name": "Home", "url": "https://dotmaal.com/" },
-  { "id": "web-series", "name": "Web Series", "url": "https://dotmaal.com/web-series/" },
-  { "id": "ott", "name": "OTT", "url": "https://dotmaal.com/ott/" },
-  { "id": "models", "name": "Models", "url": "https://dotmaal.com/models/" },
-  { "id": "tags", "name": "Tags", "url": "https://dotmaal.com/tags/" },
   { "id": "ullu", "name": "ULLU", "url": "https://dotmaal.com/category/ullu/" },
   { "id": "atrangii", "name": "Atrangii", "url": "https://dotmaal.com/category/atrangii/" },
   { "id": "rabbit", "name": "Rabbit", "url": "https://dotmaal.com/category/rabbit/" },
