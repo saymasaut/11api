@@ -504,7 +504,7 @@ EXPLORE_SOURCES = [
         hasCategories=True,
         searchUrlTemplate="https://www.google.com/search?q={query}+site:missav.ai",
         sourceId="missav",
-        disable=True,
+        disable=False,
         pageSize=32,
     ),
     ExploreSourceResponse(
