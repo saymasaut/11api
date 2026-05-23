@@ -2707,6 +2707,72 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=bindasmood"
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://bindasmood.com/valentine-date-2026-hindi-uncut-xxx-video/"
 ```
 
+## DOTMaal (dotmaal.com) Implementation Notes
+
+[DOTMaal](https://dotmaal.com/) is a WordPress site using the **OGP** theme with the **xplayer** plugin. It aggregates Hindi/Indian OTT web series (ULLU, Atrangii, Pull, Desi Prime, Kahani Play, etc.). Episode pages use a two-segment path: `/{platform}/{episode-slug}/`. Listing cards use `div.vc-wrap` with thumb link `a.vc-thumb`, title `a.vc-title`, duration `span.vc-duration`, and OTT badge `span.vc-badge`.
+
+### Host aliases
+
+- `dotmaal.com`
+- `www.dotmaal.com`
+
+### Listing and pagination (`list_videos`)
+
+- Home: `https://dotmaal.com/`
+- Indexes: `/web-series/`, `/ott/`, `/models/`, `/tags/`
+- Taxonomy: `/category/{slug}/` (OTT/network), `/tag/{slug}/`, `/model/{slug}/`, `/web-series/{series-slug}/`
+- Parse `div.vc-wrap` → `a.vc-thumb` / `a.vc-title`; thumb `img`; `span.vc-duration`; `span.vc-badge` as `uploader_name`
+- Pagination: WordPress `/page/{n}/` on any list path (e.g. `https://dotmaal.com/page/2/`, `https://dotmaal.com/category/ullu/page/2/`)
+
+### Metadata and streams (`scrape`)
+
+- Canonical episode URL: `https://dotmaal.com/{platform}/{episode-slug}/` (reject reserved first segments: `category`, `tag`, `model`, `web-series`, `page`, etc.)
+- Streams: `<video><source src="...">` on the episode page (signed MP4 on `video.maalcdn.com`); HTML-entity decode URLs (`&#038;` → `&`); regex fallback for `.mp4` / `.m3u8`
+- Title/thumb from `og:title`, `og:image`, `h1`, `video[poster]`
+
+### Categories (`get_categories`)
+
+Home, Web Series, OTT, Models, Tags, plus popular OTT networks (ULLU, Atrangii, Rabbit, ALTT, CinePrime, Kooku, Pull, Desi Prime, Kahani Play, Wow, Tru Uncut, Feel) in `categories.json`.
+
+### Registration checklist for DOTMaal
+
+Besides creating `backend/app/scrapers/dotmaal/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=dotmaal` or `source=dot`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `dotmaal.com`, `maalcdn.com`, `video.maalcdn.com`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="dotmaal"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### DOTMaal verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://dotmaal.com/pull/tadap-pull-episode-2/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://dotmaal.com/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://dotmaal.com/category/ullu/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=dotmaal"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://dotmaal.com/pull/tadap-pull-episode-2/"
+```
+
 ## Eporner (eporner.com) Implementation Notes
 
 [Eporner](https://www.eporner.com/) is a large tube site with mandatory age verification in some regions. Video pages use alphanumeric IDs under `/video-{id}/{slug}/` (legacy `/hd-porn/{id}/{slug}/`). **Embed player URLs** (`/embed/{id}/`, used in iframes) are first-class scrape targets and always expose an `format: "embed"` stream for WebView/iframe playback. Streams are resolved via the site XHR API (hash from page HTML), with fallbacks to the public v2 metadata API and HTML `<source>` / MP4 regex extraction.

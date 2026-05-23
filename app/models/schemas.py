@@ -102,6 +102,8 @@ class ScrapeRequest(BaseModel):
             "bindasmood.com",
             "eporner.com",
             "porntrex.com",
+            "dotmaal.com",
+            "maalcdn.com",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v
@@ -197,6 +199,8 @@ class ListRequest(BaseModel):
             "bindasmood.com",
             "eporner.com",
             "porntrex.com",
+            "dotmaal.com",
+            "maalcdn.com",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v

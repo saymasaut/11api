@@ -1,0 +1,21 @@
+[
+  { "id": "home", "name": "Home", "url": "https://dotmaal.com/" },
+  { "id": "web-series", "name": "Web Series", "url": "https://dotmaal.com/web-series/" },
+  { "id": "ott", "name": "OTT", "url": "https://dotmaal.com/ott/" },
+  { "id": "models", "name": "Models", "url": "https://dotmaal.com/models/" },
+  { "id": "tags", "name": "Tags", "url": "https://dotmaal.com/tags/" },
+  { "id": "ullu", "name": "ULLU", "url": "https://dotmaal.com/category/ullu/" },
+  { "id": "atrangii", "name": "Atrangii", "url": "https://dotmaal.com/category/atrangii/" },
+  { "id": "rabbit", "name": "Rabbit", "url": "https://dotmaal.com/category/rabbit/" },
+  { "id": "altt", "name": "ALTT", "url": "https://dotmaal.com/category/altt/" },
+  { "id": "cineprime", "name": "CinePrime", "url": "https://dotmaal.com/category/cineprime/" },
+  { "id": "kooku", "name": "Kooku", "url": "https://dotmaal.com/category/kooku/" },
+  { "id": "xmasti", "name": "Xmasti", "url": "https://dotmaal.com/tag/xmasti/" },
+  { "id": "aagmaal", "name": "Aagmaal", "url": "https://dotmaal.com/tag/aagmaal/" },
+  { "id": "pull", "name": "Pull", "url": "https://dotmaal.com/category/pull/" },
+  { "id": "desi-prime", "name": "Desi Prime", "url": "https://dotmaal.com/category/desi-prime/" },
+  { "id": "kahani-play", "name": "Kahani Play", "url": "https://dotmaal.com/category/kahani-play/" },
+  { "id": "wow-entertainment", "name": "Wow Entertainment", "url": "https://dotmaal.com/category/wow-entertainment/" },
+  { "id": "tru-uncut", "name": "Tru Uncut", "url": "https://dotmaal.com/category/tru-uncut/" },
+  { "id": "feel", "name": "Feel", "url": "https://dotmaal.com/category/feel/" }
+]
