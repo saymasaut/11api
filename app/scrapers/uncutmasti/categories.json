@@ -1,0 +1,15 @@
+[
+  { "id": "home", "name": "Home", "url": "https://uncutmasti.com/" },
+  { "id": "latest", "name": "Latest videos", "url": "https://uncutmasti.com/?filter=latest" },
+  { "id": "popular", "name": "Popular videos", "url": "https://uncutmasti.com/?filter=popular" },
+  { "id": "most-viewed", "name": "Most viewed", "url": "https://uncutmasti.com/?filter=most-viewed" },
+  { "id": "longest", "name": "Longest videos", "url": "https://uncutmasti.com/?filter=longest" },
+  { "id": "random", "name": "Random videos", "url": "https://uncutmasti.com/?filter=random" },
+  { "id": "bindastimes", "name": "BindasTimes Uncut Web Series", "url": "https://uncutmasti.com/category/bindastimes-uncut-web-series/" },
+  { "id": "atrangii", "name": "Atrangii Originals", "url": "https://uncutmasti.com/category/atrangii-originals-hot-web-series/" },
+  { "id": "digi-movieplex", "name": "Digi Movieplex", "url": "https://uncutmasti.com/category/digi-movieplex-hot-web-series/" },
+  { "id": "besharams", "name": "Besharams Porn Web Series", "url": "https://uncutmasti.com/category/besharams-porn-web-series/" },
+  { "id": "gupchup", "name": "GupChup Originals", "url": "https://uncutmasti.com/category/gupchup-originals-web-series/" },
+  { "id": "flizmovies", "name": "FlizMovies Originals", "url": "https://uncutmasti.com/category/flizmovies-originals-web-series/" },
+  { "id": "boom-movies", "name": "Boom Movies Originals", "url": "https://uncutmasti.com/category/boom-movies-originals-web-series/" }
+]
