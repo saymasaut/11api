@@ -106,6 +106,7 @@ class ScrapeRequest(BaseModel):
             "maalcdn.com",
             "uncutmasti.com",
             "ixifile.xyz",
+            "zmaal.net",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v
@@ -205,6 +206,7 @@ class ListRequest(BaseModel):
             "maalcdn.com",
             "uncutmasti.com",
             "ixifile.xyz",
+            "zmaal.net",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v

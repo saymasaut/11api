@@ -2840,6 +2840,73 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=uncutmasti"
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://uncutmasti.com/mona-darling-2026-moodx-hindi-xxx-web-series-episode-2/"
 ```
 
+## ZMaal (zmaal.net) Implementation Notes
+
+[ZMaal](https://zmaal.net/) is a WordPress site for Hindi uncut web series. The main video feed is at `/latest/`. Posts use a single root-level slug (`/{slug}/`). Listing uses `article.video` cards with `a.link`, `img`, and `span.rtitle`. Streams are signed **MP4** URLs on `video.maalcdn.com` (same CDN family as DOTMaal), embedded via `<video><source>` or HTML regex fallback.
+
+### Host aliases
+
+- `zmaal.net`
+- `www.zmaal.net`
+
+### Listing and pagination (`list_videos`)
+
+- Primary feed: `https://zmaal.net/latest/`
+- Indexes: `/model/`, `/web-series/`, `/hot-web-series/`
+- Site search: `?s={query}` (e.g. `?s=Ullu`, `?s=Moodx`)
+- Parse `article.video` → `a.link[href]`; title from `aria-label`, `title`, or `span.rtitle`; thumb `img`
+- Pagination: `/latest/page/{n}/` (e.g. `https://zmaal.net/latest/page/2/`); works on any list path with WordPress-style `/page/{n}/` suffix
+
+### Metadata and streams (`scrape`)
+
+- Canonical post URL: `https://zmaal.net/{slug}/` (single hyphenated slug segment)
+- Reject reserved paths: `latest`, `model`, `web-series`, `hot-web-series`, `page`, `wp-content`, etc.
+- Streams: `<video><source src="...">` and regex `.mp4` / `.m3u8`; HTML-entity decode URLs (`&#038;` → `&`)
+- Title/thumb from `og:title`, `og:image`, `h1`, `video[poster]`
+
+### Categories (`get_categories`)
+
+Latest feed, Home, Models, Web Series indexes, and popular keyword searches (`?s=Ullu`, etc.) in `categories.json`.
+
+### Registration checklist for ZMaal
+
+Besides creating `backend/app/scrapers/zmaal/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=zmaal`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `zmaal.net`, `maalcdn.com`, `video.maalcdn.com`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="zmaal"`, `baseUrl=https://zmaal.net/latest/`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### ZMaal verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://zmaal.net/husband-friend/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://zmaal.net/latest/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://zmaal.net/latest/page/2/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=zmaal"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://zmaal.net/pastry-episode-1/"
+```
+
 ## Eporner (eporner.com) Implementation Notes
 
 [Eporner](https://www.eporner.com/) is a large tube site with mandatory age verification in some regions. Video pages use alphanumeric IDs under `/video-{id}/{slug}/` (legacy `/hd-porn/{id}/{slug}/`). **Embed player URLs** (`/embed/{id}/`, used in iframes) are first-class scrape targets and always expose an `format: "embed"` stream for WebView/iframe playback. Streams are resolved via the site XHR API (hash from page HTML), with fallbacks to the public v2 metadata API and HTML `<source>` / MP4 regex extraction.
