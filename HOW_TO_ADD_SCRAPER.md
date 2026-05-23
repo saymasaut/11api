@@ -2974,6 +2974,73 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=ulluwebseries"
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://ulluwebseries.one/hot-series/tu-haan-kar-ya-naa-kar-ullu-web-series-e06/"
 ```
 
+## DesiThotHub (desithothub.com) Implementation Notes
+
+[DesiThotHub](https://desithothub.com/) is a custom WordPress-style site for desi live/cam and MMS-style videos. Posts use a single root-level slug (`/{slug}/`). Listing uses `div.thumb` cards with `a.card`, `h2.card-title`, `img`, and `span.time-ago`. Streams are usually **MP4** URLs from third-party hosts (`streamtape.com`, `sendvid.com`, `lulustream.com`, etc.) in page HTML, with iframe embed fetch fallback.
+
+### Host aliases
+
+- `desithothub.com`
+- `www.desithothub.com`
+
+### Listing and pagination (`list_videos`)
+
+- Home (newest): `https://desithothub.com/`
+- Feeds: `/popular/`, `/favourites/`
+- Taxonomy: `/categories/`, `/categories/{slug}/` (e.g. `/categories/tamil/`, `/categories/mallu/`)
+- Parse `div.thumb` → `a.card`; title `h2.card-title`; thumb `img`; `span.time-ago`
+- Pagination: WordPress `/page/{n}/` (e.g. `https://desithothub.com/page/2/`)
+
+### Metadata and streams (`scrape`)
+
+- Canonical post URL: `https://desithothub.com/{slug}/` (single hyphenated slug segment)
+- Reject reserved paths: `categories`, `popular`, `newest`, `tags`, `favourites`, `page`, etc.
+- Streams: regex `.mp4` / `.m3u8` from post HTML; if none, fetch known embed iframes (`sendvid.com`, `streamtape.com`, `lulustream.com`, etc.) and retry; last resort `format: embed` on iframe `src`
+- Title/thumb from `og:title`, `og:image`, `h1`/`h2`
+
+### Categories (`get_categories`)
+
+Newest, Popular, Categories index, Favourites, plus popular tags (Tamil, Mallu, Bengali, Big Boobs, etc.) in `categories.json`.
+
+### Registration checklist for DesiThotHub
+
+Besides creating `backend/app/scrapers/desithothub/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=desithothub` or `source=thothub`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `desithothub.com`, `streamtape.com`, `sendvid.com`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="desithothub"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### DesiThotHub verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://desithothub.com/tamil-madhu-aunty-nude-premium-live-show/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://desithothub.com/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://desithothub.com/categories/tamil/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=desithothub"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://desithothub.com/tamil-madhu-aunty-nude-premium-live-show/"
+```
+
 ## Eporner (eporner.com) Implementation Notes
 
 [Eporner](https://www.eporner.com/) is a large tube site with mandatory age verification in some regions. Video pages use alphanumeric IDs under `/video-{id}/{slug}/` (legacy `/hd-porn/{id}/{slug}/`). **Embed player URLs** (`/embed/{id}/`, used in iframes) are first-class scrape targets and always expose an `format: "embed"` stream for WebView/iframe playback. Streams are resolved via the site XHR API (hash from page HTML), with fallbacks to the public v2 metadata API and HTML `<source>` / MP4 regex extraction.
