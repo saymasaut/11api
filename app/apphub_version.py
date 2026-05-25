@@ -16,8 +16,8 @@ DOWNLOAD_URLS = {
     "universal": ""
 }
 DOWNLOAD_SIZES = {
-    "arm64-v8a": 22000000,
-    "armeabi-v7a": 2200000,
+    "arm64-v8a": 23000000,
+    "armeabi-v7a": 22000000,
     "x86": 23000000,
     "x86_64": 23000000,
     "universal": 40000000
@@ -33,10 +33,10 @@ IS_MANDATORY = False  # If True, prompts an update regardless of MIN_SUPPORTED_B
 TELEGRAM_CHANNEL = "https://t.me/+IDEuHZyD9lc5Y2Jl"
 
 # Changelog Details
-CHANGELOG_TITLE = "🎉 What's New in v9.0.0"
+CHANGELOG_TITLE = "🎉 What's New in v10.0.0"
 CHANGELOG = """
 ✨ Major Features
-• Added 14+ New website support
+• Added 20+ New website support
 • Downloads and Favorite ui Update
 
 🛠️ Bug Fixes & Enhancements
