@@ -380,7 +380,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://mydesimms.watch/",
         nickname="Mydesi",
-        favicon="https://mydesimms.watch/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/mydasi.webp",
         accentColor="#00897B",
         category="porn",
         isVerified=False,
@@ -393,7 +393,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://www.85po.com/",
         nickname="85PO",
-        favicon="https://www.85po.com/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/85po.ico",
         accentColor="#FF5722",
         category="porn",
         isVerified=False,
@@ -406,7 +406,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://cosxplay.com/",
         nickname="CosXplay",
-        favicon="https://cosxplay.com/storage/2020/08/cropped-favicon-cosxplay-32x32.png",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/cosplay.png",
         accentColor="#AE59FF",
         category="porn",
         isVerified=False,
@@ -419,7 +419,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://memojav.com/",
         nickname="MemoJav",
-        favicon="https://memojav.com/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/memojav.ico",
         accentColor="#ED3146",
         category="porn",
         isVerified=False,
@@ -432,7 +432,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://hohoj.tv/search?type=all",
         nickname="HoHoJ",
-        favicon="https://hohoj.tv/resources/img/small_icon.png",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/hohoj.png",
         accentColor="#FF65C1",
         category="porn",
         isVerified=False,
@@ -445,7 +445,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://ggjav.com/main/uncensored",
         nickname="GGJAV",
-        favicon="https://ggjav.com/resources/icons/icon.png",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/ggjav.png",
         accentColor="#2287F0",
         category="porn",
         isVerified=False,
@@ -458,7 +458,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://porn87.com/main/tag?lineup=create_time",
         nickname="Porn87",
-        favicon="https://porn87.com/static/icon.png",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/porn87.png",
         accentColor="#FF007E",
         category="porn",
         isVerified=False,
@@ -471,7 +471,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="http://goodav17.com/",
         nickname="GoodAV",
-        favicon="http://goodav17.com/static/icon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/goodav.ico",
         accentColor="#247AD9",
         category="porn",
         isVerified=False,
@@ -484,7 +484,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://kanav.ad/index.php/vod/type/id/1.html",
         nickname="KanAV",
-        favicon="https://kanav.ad/template/YS008/html/style/images/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/kanav.ico",
         accentColor="#E91E63",
         category="porn",
         isVerified=False,
@@ -497,7 +497,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://missav.ai/dm539/new",
         nickname="MissAV",
-        favicon="https://missav.ai/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/missav.ico",
         accentColor="#F43F5E",
         category="porn",
         isVerified=False,
@@ -510,7 +510,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://jable.tv/latest-updates/",
         nickname="Jable",
-        favicon="https://assets-cdn.jable.tv/assets/icon/favicon.png",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/javel.png",
         accentColor="#6EADA3",
         category="porn",
         isVerified=False,
@@ -523,7 +523,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://www.94mt.cc/",
         nickname="天美影院",
-        favicon="https://www.94mt.cc/template/tmyy/images/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/94mt.ico",
         accentColor="#E91E63",
         category="porn",
         isVerified=False,
@@ -536,7 +536,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://bindasmood.com/",
         nickname="BindasMood",
-        favicon="https://bindasmood.com/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/bindas.png",
         accentColor="#FF5722",
         category="porn",
         isVerified=False,
@@ -549,7 +549,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://dotmaal.com/",
         nickname="DOTMaal",
-        favicon="https://dotmaal.com/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/dotmal.png",
         accentColor="#7B1FA2",
         category="porn",
         isVerified=False,
@@ -562,7 +562,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://uncutmasti.com/",
         nickname="UncutMasti",
-        favicon="https://uncutmasti.com/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/uncut.png",
         accentColor="#C62828",
         category="porn",
         isVerified=False,
@@ -575,7 +575,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://zmaal.net/latest/",
         nickname="ZMaal",
-        favicon="https://zmaal.net/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/zmaal.webp",
         accentColor="#1565C0",
         category="porn",
         isVerified=False,
@@ -588,7 +588,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://ulluwebseries.one/",
         nickname="ULLU Web Series",
-        favicon="https://ulluwebseries.one/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/ulluweb.png",
         accentColor="#E65100",
         category="porn",
         isVerified=False,
@@ -601,7 +601,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://desithothub.com/",
         nickname="DesiThotHub",
-        favicon="https://desithothub.com/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/desithothub.png",
         accentColor="#AD1457",
         category="porn",
         isVerified=False,
@@ -614,7 +614,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://www.eporner.com/",
         nickname="Eporner",
-        favicon="https://www.eporner.com/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/eporner.ico",
         accentColor="#1565C0",
         category="porn",
         isVerified=False,
@@ -627,7 +627,7 @@ EXPLORE_SOURCES = [
     ExploreSourceResponse(
         baseUrl="https://www.porntrex.com/",
         nickname="PornTrex",
-        favicon="https://www.porntrex.com/favicon.ico",
+        favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/porntrex.ico",
         accentColor="#6A1B9A",
         category="porn",
         isVerified=False,
