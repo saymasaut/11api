@@ -64,15 +64,6 @@ DUMMY_MEDIA_CONFIG = MediaConfigData(
                     color_hex="#9C27B0",
                     playlist_url="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/india.m3u",
                 ),
-                MediaCategoryResponse(
-                    id="adult_18",
-                    title="Adult (18+)",
-                    type="vod",
-                    logo_url="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/18-plus-age-restriction-icon.svg",
-                    color_hex="#F44336",
-                    playlist_url="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/adult.m3u",
-                    requires_pin=False,
-                ),
             ],
         ),
         MediaProviderResponse(
@@ -81,14 +72,6 @@ DUMMY_MEDIA_CONFIG = MediaConfigData(
             logo_url="https://example.com/images/free_logo.png",
             is_active=True,
             categories=[
-                MediaCategoryResponse(
-                    id="LiveEvents",
-                    title="Live Events",
-                    type="live",
-                    logo_url="https://apkfolder.io/wp-content/uploads/2026/03/live.webp",
-                    color_hex="#00BCD4",
-                    playlist_url="https://raw.githubusercontent.com/abusaeeidx/BDxTV/refs/heads/main/playlist_s.m3u",
-                ),
                 MediaCategoryResponse(
                     id="SportzfySpecial",
                     title="Sportzfy Special",
@@ -164,28 +147,12 @@ DUMMY_MEDIA_CONFIG = MediaConfigData(
                     playlist_url="https://wasitv-pro.site/sportz.php?token=1wzIrANIxEtHDHKdVw9yYSddXRs_wyxn3PzVQN_mnIF4&gid=369105542",
                 ),
                 MediaCategoryResponse(
-                    id="CricHD",
-                    title="Cric HD",
-                    type="live",
-                    logo_url="https://apkfolder.io/wp-content/uploads/2026/03/content-1-1.webp",
-                    color_hex="#FF9800",
-                    playlist_url="https://raw.githubusercontent.com/streamifytv/abbas/refs/heads/main/crichd.m3u",
-                ),
-                MediaCategoryResponse(
                     id="ArabicSports",
                     title="Arabic Sports",
                     type="live",
                     logo_url="https://apkfolder.io/wp-content/uploads/2026/03/arab-1.webp",
                     color_hex="#FF9800",
                     playlist_url="https://wasitv-pro.site/sportz.php?token=1wzIrANIxEtHDHKdVw9yYSddXRs_wyxn3PzVQN_mnIF4&gid=1185593386",
-                ),
-                MediaCategoryResponse(
-                    id="IndianSports",
-                    title="Indian Sports",
-                    type="live",
-                    logo_url="https://apkfolder.io/wp-content/uploads/2026/03/india.webp",
-                    color_hex="#FF9800",
-                    playlist_url="https://wasitv-pro.site/sportz.php?token=1wzIrANIxEtHDHKdVw9yYSddXRs_wyxn3PzVQN_mnIF4&gid=126924454",
                 ),
                 MediaCategoryResponse(
                     id="Fancode-IND",
@@ -219,17 +186,26 @@ DUMMY_MEDIA_CONFIG = MediaConfigData(
                     color_hex="#FF9800",
                     playlist_url="https://raw.githubusercontent.com/BINOD-XD/Toffee-Auto-Update-Playlist/refs/heads/main/toffee_NS_Player.m3u",
                 ),
-                MediaCategoryResponse(
-                    id="Tamasha(PK)",
-                    title="Tamasha (PK)",
-                    type="live",
-                    logo_url="https://crystalpng.com/wp-content/uploads/2025/10/Tamasha-Logo.png",
-                    color_hex="#FF9800",
-                    playlist_url="https://sportsbd.top/playlist/playlist.m3u?id=6e07226c623a",
-                ),
             ],
         ),
-    ],
+        MediaProviderResponse(
+            id="adult_18",
+            name="Adult",
+            logo_url="https://example.com/images/free_logo.png",
+            is_active=True,
+            categories=[
+                MediaCategoryResponse(
+                    id="adult_18",
+                    title="Adult (18+)",
+                    type="vod",
+                    logo_url="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/18-plus-age-restriction-icon.svg",
+                    color_hex="#F44336",
+                    playlist_url="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/adult.m3u",
+                    requires_pin=False,
+                ),
+            ],
+        )
+    ]
 )
 
 @router.get("/media/providers", response_model=MediaConfigResponse, tags=["Media Center"])
