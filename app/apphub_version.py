@@ -2,7 +2,7 @@
 # Update this file when you release a new version of AppHub
 
 VERSION = "10.0.0"
-BUILD_NUMBER = 4010
+BUILD_NUMBER = 10
 # Force all builds older than the current release to update.
 MIN_SUPPORTED_BUILD = BUILD_NUMBER
 RELEASE_DATE = "2026-05-26"
