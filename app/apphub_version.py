@@ -1,11 +1,11 @@
 # AppHub Version Configuration
 # Update this file when you release a new version of AppHub
 
-VERSION = "9.0.0"
-BUILD_NUMBER = 9
+VERSION = "10.0.0"
+BUILD_NUMBER = 10
 # Force all builds older than the current release to update.
 MIN_SUPPORTED_BUILD = BUILD_NUMBER
-RELEASE_DATE = "2026-04-30"
+RELEASE_DATE = "2026-05-26"
 
 # File Information
 DOWNLOAD_URLS = {
@@ -36,11 +36,19 @@ TELEGRAM_CHANNEL = "https://t.me/+IDEuHZyD9lc5Y2Jl"
 CHANGELOG_TITLE = "🎉 What's New in v10.0.0"
 CHANGELOG = """
 ✨ Major Features
-• Added 20+ New website support
-• Downloads and Favorite ui Update
+• Updated package name and signing key.
+• Fixed security vulnerabilities.
+• Added Google and Email login system.
+• Added 20+ new websites (Total: 64+).
 
 🛠️ Bug Fixes & Enhancements
-• Player Controller black mask removed
-• XXXParodyHD server change to streamtape
+• Fixed Kamababa, Dasimms2, YouPorn, and XHamster.
 • Many more not on the list
+
+⚠️ CRITICAL INSTALLATION NOTE
+• Due to the new package name and security key, you MUST 
+uninstall the older version from your device
+• If you experience any coin loss while moving away from 
+the local guest login system, please contact us 
+immediately so we can help you recover them.
 """
