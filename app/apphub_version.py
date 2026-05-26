@@ -44,8 +44,6 @@ CHANGELOG = """
 🛠️ Bug Fixes & Enhancements
 • Fixed Kamababa, Dasimms2, YouPorn, and XHamster.
 • Many more not on the list
-
-⚠️ CRITICAL INSTALLATION NOTE
 • Due to the new package name and security key, you MUST 
 uninstall the older version from your device
 • If you experience any coin loss while moving away from 
