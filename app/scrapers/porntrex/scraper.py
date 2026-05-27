@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
@@ -46,6 +47,20 @@ _VIDEO_HREF_RE = re.compile(
     r'href=["\'](?:https?://(?:www\.)?porntrex\.com)?/video/(\d+)/([^"\']+)/?["\']',
     re.IGNORECASE,
 )
+_REQUEST_LOCK = asyncio.Lock()
+_NEXT_ALLOWED_REQUEST_AT = 0.0
+_MIN_REQUEST_INTERVAL_SECONDS = 1.25
+
+
+async def _throttle_requests() -> None:
+    """Global per-process pacing to reduce upstream rate-limit triggers."""
+    global _NEXT_ALLOWED_REQUEST_AT
+    async with _REQUEST_LOCK:
+        now = time.monotonic()
+        wait_for = _NEXT_ALLOWED_REQUEST_AT - now
+        if wait_for > 0:
+            await asyncio.sleep(wait_for)
+        _NEXT_ALLOWED_REQUEST_AT = time.monotonic() + _MIN_REQUEST_INTERVAL_SECONDS
 
 
 def can_handle(host: str) -> bool:
@@ -124,6 +139,8 @@ async def fetch_page(url: str, *, referer: str | None = None) -> str:
     headers = _browser_headers(referer)
     timeout = aiohttp.ClientTimeout(total=18, connect=6, sock_read=12)
     pool_err: Exception | None = None
+
+    await _throttle_requests()
 
     try:
         return await pool_fetch_html(clean_url, headers=headers, timeout=timeout, retries=1)
@@ -518,7 +535,7 @@ async def scrape(url: str) -> dict[str, Any]:
 
 
 _PAGINATED_SECTIONS = frozenset({"latest-updates", "top-rated", "most-popular"})
-_LIST_FETCH_ATTEMPTS = 5
+_LIST_FETCH_ATTEMPTS = 3
 
 
 def _normalize_list_path(path: str) -> str:
