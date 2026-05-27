@@ -12,7 +12,7 @@ from app.core.pool import fetch_html as pool_fetch_html
 
 BASE_SITE = "https://missav.ai/"
 SITE_HOST = "missav.ai"
-SITE_ALIASES = frozenset({"missav.ai", "www.missav.ai"})
+SITE_ALIASES = frozenset({"missav.ai", "www.missav.ai", "missav.ws", "www.missav.ws"})
 
 _LOCALES = frozenset(
     {
@@ -54,7 +54,7 @@ _RESERVED_SLUGS = frozenset(
 
 _DM_PREFIX_RE = re.compile(r"^dm\d+$", re.IGNORECASE)
 _VIDEO_PAGE_RE = re.compile(
-    r"^https?://(?:www\.)?missav\.ai/(?:(?P<dm>dm\d+)/)?(?:(?P<locale>[a-z]{2}(?:-[a-z]+)?)/)?(?P<dvd>[a-z0-9][a-z0-9-]*)/?$",
+    r"^https?://(?:www\.)?missav\.(?:ai|ws)/(?:(?P<dm>dm\d+)/)?(?:(?P<locale>[a-z]{2}(?:-[a-z]+)?)/)?(?P<dvd>[a-z0-9][a-z0-9-]*)/?$",
     re.IGNORECASE,
 )
 _VIDEO_HREF_RE = _VIDEO_PAGE_RE
@@ -67,11 +67,21 @@ _M3U8_RE = re.compile(r"https?://[^\s\"'<>]+\.m3u8[^\s\"'<>]*", re.IGNORECASE)
 _DVD_ID_RE = re.compile(r"dvdId:\s*'([^']+)'", re.IGNORECASE)
 
 
-def can_handle(host: str) -> bool:
+def _normalize_host(host: str) -> str:
     h = (host or "").lower().split(":")[0]
     if h.startswith("www."):
         h = h[4:]
-    return h in SITE_ALIASES or h.endswith(".missav.ai")
+    return h
+
+
+def _is_supported_host(host: str) -> bool:
+    h = _normalize_host(host)
+    return h in {"missav.ai", "missav.ws"}
+
+
+def can_handle(host: str) -> bool:
+    h = _normalize_host(host)
+    return h in SITE_ALIASES or h.endswith(".missav.ai") or h.endswith(".missav.ws")
 
 
 def get_categories() -> list[dict]:
@@ -187,7 +197,7 @@ def _extract_dvd_id(url: str) -> Optional[str]:
             return None
         return dvd if _is_video_slug(dvd) else None
     parsed = urlparse(raw)
-    if (parsed.netloc or "").lower().replace("www.", "") != SITE_HOST:
+    if not _is_supported_host(parsed.netloc):
         return None
     parts = [p for p in (parsed.path or "").split("/") if p]
     _, dvd = _parse_video_path_parts(parts)
@@ -223,7 +233,7 @@ def _normalize_video_href(href: str) -> Optional[str]:
         loc = (m.group("locale") or "en").lower().split("-")[0]
         return _canonical_video_url(dvd, locale=loc or "en")
     parsed = urlparse(href)
-    if (parsed.netloc or "").lower().replace("www.", "") != SITE_HOST:
+    if not _is_supported_host(parsed.netloc):
         return None
     parts = [p for p in (parsed.path or "").split("/") if p]
     locale, dvd = _parse_video_path_parts(parts)
@@ -387,10 +397,15 @@ def _build_list_page_url(base_url: str, page: int) -> str:
     else:
         q["page"] = str(page_num)
     query = urlencode(q) if q else ""
+    netloc = parsed.netloc or SITE_HOST
+    if _is_supported_host(netloc):
+        # Canonicalize to .ai so ws/ai inputs share the same stable upstream.
+        netloc = SITE_HOST
+
     return urlunparse(
         (
             parsed.scheme or "https",
-            parsed.netloc or SITE_HOST,
+            netloc,
             parsed.path or "/",
             "",
             query,
