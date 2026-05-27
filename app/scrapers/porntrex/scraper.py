@@ -120,7 +120,9 @@ async def _fetch_with_curl_cffi(url: str, *, headers: dict[str, str]) -> Optiona
 async def _fetch_with_httpx(url: str, *, headers: dict[str, str]) -> str:
     async with httpx.AsyncClient(
         follow_redirects=True,
-        timeout=httpx.Timeout(45.0, connect=20.0),
+        # Keep this relatively tight; PornTrex sometimes stalls long enough to
+        # create a backlog under load. We'll retry at a higher level.
+        timeout=httpx.Timeout(20.0, connect=12.0),
         headers=headers,
     ) as client:
         resp = await client.get(_sanitize_url(url))
@@ -131,34 +133,33 @@ async def _fetch_with_httpx(url: str, *, headers: dict[str, str]) -> str:
 async def fetch_page(url: str, *, referer: str | None = None) -> str:
     clean_url = _sanitize_url(url)
     headers = _browser_headers(referer)
-    timeout = aiohttp.ClientTimeout(total=18, connect=6, sock_read=12)
+    # PornTrex intermittently stalls TLS/connection establishment on some networks.
+    # Keep timeouts reasonable, but not so strict that transient stalls dominate.
+    timeout = aiohttp.ClientTimeout(total=35, connect=15, sock_read=25)
     pool_err: Exception | None = None
 
     await _throttle_requests()
 
     try:
-        return await pool_fetch_html(clean_url, headers=headers, timeout=timeout, retries=1)
-    except Exception as exc:
-        pool_err = exc
-        logger.warning("PornTrex pool fetch failed for %s: %s", clean_url, exc)
+        # Prefer httpx first: it has been more reliable than the pooled aiohttp path
+        # in the presence of intermittent connect/TLS stalls.
+        return await _fetch_with_httpx(clean_url, headers=headers)
+    except Exception as httpx_err:
+        logger.warning("PornTrex httpx fetch failed for %s: %s", clean_url, httpx_err)
 
     try:
-        text = await asyncio.wait_for(
-            _fetch_with_curl_cffi(clean_url, headers=headers),
-            timeout=15,
-        )
+        text = await asyncio.wait_for(_fetch_with_curl_cffi(clean_url, headers=headers), timeout=15)
     except Exception:
         text = None
     if text:
         return text
 
     try:
-        return await _fetch_with_httpx(clean_url, headers=headers)
-    except Exception as httpx_err:
-        logger.warning("PornTrex httpx fetch failed for %s: %s", clean_url, httpx_err)
-        if pool_err is not None:
-            raise pool_err from httpx_err
-        raise httpx_err
+        return await pool_fetch_html(clean_url, headers=headers, timeout=timeout, retries=2)
+    except Exception as exc:
+        pool_err = exc
+        logger.warning("PornTrex pool fetch failed for %s: %s", clean_url, exc)
+        raise pool_err
 
 
 def _first_non_empty(*values: Optional[str]) -> Optional[str]:
