@@ -29,27 +29,20 @@ async def hls_proxy(
         raise HTTPException(status_code=400, detail="Missing URL")
     
     headers = {}
-    url_lower = url.lower()
-    # Many CDNs reject Range headers on manifests; only forward Range for segment/binary URLs.
-    is_manifest_url = url_lower.endswith(".m3u8") or ".m3u8" in url_lower
-
-    # Provide a default referer/origin for Pornhub-like assets when the client doesn't send one.
-    # This reduces 4xx responses from upstream CDNs.
-    if (referer is None or not str(referer).strip()) and ("pornhub.com" in url_lower or "phncdn.com" in url_lower):
-        referer = "https://www.pornhub.com/"
-    if (origin is None or not str(origin).strip()) and ("pornhub.com" in url_lower or "phncdn.com" in url_lower):
-        origin = "https://www.pornhub.com/"
-
     ua = user_agent if user_agent else request.headers.get("user-agent", "Mozilla/5.0")
     if ua:
         headers["User-Agent"] = ua
-    if referer:
-        headers["Referer"] = referer
-    if origin:
-        headers["Origin"] = origin
+    # Prefer explicit query params, but fall back to incoming request headers.
+    # Many clients (e.g. BetterPlayer) send Referer/Origin as headers, not query params.
+    effective_referer = referer or request.headers.get("referer")
+    effective_origin = origin or request.headers.get("origin")
+    if effective_referer:
+        headers["Referer"] = effective_referer
+    if effective_origin:
+        headers["Origin"] = effective_origin
     
     range_header = request.headers.get("range")
-    if range_header and not is_manifest_url:
+    if range_header:
         headers["Range"] = range_header
         
     try:
@@ -58,14 +51,6 @@ async def hls_proxy(
         client = httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=15.0)
         req = client.build_request("GET", url)
         resp = await client.send(req, stream=True)
-
-        # Some Pornhub-related CDNs reject specific Range requests with 400.
-        # If that happens, retry once without Range.
-        if resp.status_code == 400 and "Range" in headers:
-            await resp.aread()
-            headers.pop("Range", None)
-            req = client.build_request("GET", url, headers=headers)
-            resp = await client.send(req, stream=True)
         
         # 1. Handle Meta-Refresh or session initialization (common in BrazzPW manifests)
         content_type = resp.headers.get("content-type", "").lower()
