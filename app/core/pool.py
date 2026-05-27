@@ -135,6 +135,16 @@ async def fetch_html(url: str, retries: int = 3, **kwargs) -> str:
     headers = kwargs.pop('headers', {})
     headers.setdefault('User-Agent', get_random_user_agent())
 
+    # Some sites (like xHamster) are much more aggressive about
+    # blocking "bot-like" requests on paginated/listing URLs unless
+    # they see realistic navigation headers.
+    if "xhamster.com" in url:
+        headers.setdefault("Referer", "https://xhamster.com/")
+        headers.setdefault("Sec-Fetch-Site", "same-origin")
+        headers.setdefault("Sec-Fetch-Mode", "navigate")
+        headers.setdefault("Sec-Fetch-Dest", "document")
+        headers.setdefault("Upgrade-Insecure-Requests", "1")
+
     last_error = None
     for attempt in range(retries):
         try:
