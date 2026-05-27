@@ -30,11 +30,11 @@ RUN useradd -m -u 1000 scraper && \
 USER scraper
 
 # Expose port
-EXPOSE 7860
+EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import os, httpx; httpx.get('http://localhost:{}/health'.format(os.getenv('PORT', '7860')))"
+    CMD python -c "import httpx; httpx.get('http://localhost:8000/health')"
 
 # Start application
-CMD sh -c "uvicorn main:app --host 0.0.0.0 --port ${PORT:-7860}"
+CMD sh -c "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"
