@@ -13,7 +13,7 @@ import aiohttp
 import httpx
 from bs4 import BeautifulSoup
 
-from app.core.pool import fetch_html as pool_fetch_html
+from app.core.pool import fetch_html as pool_fetch_html, get_random_user_agent
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +21,7 @@ BASE_SITE = "https://www.porntrex.com/"
 SITE_HOST = "porntrex.com"
 SITE_ALIASES = frozenset({"porntrex.com", "www.porntrex.com"})
 
-_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
-
 _DEFAULT_HEADERS = {
-    "User-Agent": _USER_AGENT,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate",
@@ -83,7 +77,7 @@ def get_categories() -> list[dict]:
 def _browser_headers(referer: str | None = None) -> dict[str, str]:
     """Full browser-like headers on every PornTrex request (stable User-Agent)."""
     headers = dict(_DEFAULT_HEADERS)
-    headers["User-Agent"] = _USER_AGENT
+    headers["User-Agent"] = get_random_user_agent()
     ref = referer or BASE_SITE
     headers["Referer"] = ref
     try:
