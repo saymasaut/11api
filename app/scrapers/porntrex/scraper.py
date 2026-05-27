@@ -519,6 +519,8 @@ async def scrape(url: str) -> dict[str, Any]:
 
 _PAGINATED_SECTIONS = frozenset({"latest-updates", "top-rated", "most-popular"})
 _LIST_FETCH_ATTEMPTS = 3
+_LIST_RETRY_BASE_DELAY_SECONDS = 2.0
+_LIST_RETRY_STEP_DELAY_SECONDS = 2.0
 
 
 def _normalize_list_path(path: str) -> str:
@@ -775,7 +777,9 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
 
         if attempt < _LIST_FETCH_ATTEMPTS:
             # Short jittered backoff to recover from transient anti-bot responses.
-            await asyncio.sleep(0.8 + (attempt * 0.6))
+            await asyncio.sleep(
+                _LIST_RETRY_BASE_DELAY_SECONDS + (attempt * _LIST_RETRY_STEP_DELAY_SECONDS)
+            )
 
     if last_error:
         logger.error("PornTrex list_videos exhausted candidates for %s page %s: %s", base_url, page, last_error)
