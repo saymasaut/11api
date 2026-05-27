@@ -518,6 +518,7 @@ async def scrape(url: str) -> dict[str, Any]:
 
 
 _PAGINATED_SECTIONS = frozenset({"latest-updates", "top-rated", "most-popular"})
+_LIST_FETCH_ATTEMPTS = 3
 
 
 def _normalize_list_path(path: str) -> str:
@@ -742,22 +743,39 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[di
     referer = _normalize_list_base_url(base_url)
     effective_limit = max(1, int(limit)) if limit else 100
     last_error: Exception | None = None
+    candidates = _list_page_candidates(base_url, page)
 
-    for page_url in _list_page_candidates(base_url, page):
-        try:
-            html = await fetch_page(page_url, referer=referer)
-        except Exception as exc:
-            last_error = exc
-            logger.warning("PornTrex list fetch failed for %s: %s", page_url, exc)
-            continue
+    for attempt in range(1, _LIST_FETCH_ATTEMPTS + 1):
+        for page_url in candidates:
+            try:
+                html = await fetch_page(page_url, referer=referer)
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "PornTrex list fetch failed for %s (attempt %s/%s): %s",
+                    page_url,
+                    attempt,
+                    _LIST_FETCH_ATTEMPTS,
+                    exc,
+                )
+                continue
 
-        if not _is_list_page_html(html):
-            logger.warning("PornTrex list page invalid HTML from %s", page_url)
-            continue
+            if not _is_list_page_html(html):
+                logger.warning(
+                    "PornTrex list page invalid HTML from %s (attempt %s/%s)",
+                    page_url,
+                    attempt,
+                    _LIST_FETCH_ATTEMPTS,
+                )
+                continue
 
-        items = _parse_list_html(html, limit=effective_limit)
-        if items:
-            return items
+            items = _parse_list_html(html, limit=effective_limit)
+            if items:
+                return items
+
+        if attempt < _LIST_FETCH_ATTEMPTS:
+            # Short jittered backoff to recover from transient anti-bot responses.
+            await asyncio.sleep(0.8 + (attempt * 0.6))
 
     if last_error:
         logger.error("PornTrex list_videos exhausted candidates for %s page %s: %s", base_url, page, last_error)
