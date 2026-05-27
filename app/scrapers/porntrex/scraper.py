@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -37,7 +38,6 @@ _DEFAULT_HEADERS = {
     "Sec-Fetch-Site": "none",
     "Sec-Fetch-User": "?1",
     "Referer": BASE_SITE,
-    "Cookie": "age_pass=1; PHPSESSID=1",
 }
 
 _VIDEO_PATH_RE = re.compile(r"^/video/(\d+)/[^/]+/?$", re.IGNORECASE)
@@ -69,7 +69,13 @@ def _browser_headers(referer: str | None = None) -> dict[str, str]:
     """Full browser-like headers on every PornTrex request (stable User-Agent)."""
     headers = dict(_DEFAULT_HEADERS)
     headers["User-Agent"] = _USER_AGENT
-    headers["Referer"] = referer or BASE_SITE
+    ref = referer or BASE_SITE
+    headers["Referer"] = ref
+    try:
+        ref_host = (urlparse(ref).netloc or "").lower()
+        headers["Sec-Fetch-Site"] = "same-origin" if "porntrex.com" in ref_host else "none"
+    except Exception:
+        headers["Sec-Fetch-Site"] = "none"
     return headers
 
 
@@ -116,16 +122,22 @@ async def _fetch_with_httpx(url: str, *, headers: dict[str, str]) -> str:
 async def fetch_page(url: str, *, referer: str | None = None) -> str:
     clean_url = _sanitize_url(url)
     headers = _browser_headers(referer)
-    timeout = aiohttp.ClientTimeout(total=45, connect=20, sock_read=30)
+    timeout = aiohttp.ClientTimeout(total=18, connect=6, sock_read=12)
     pool_err: Exception | None = None
 
     try:
-        return await pool_fetch_html(clean_url, headers=headers, timeout=timeout)
+        return await pool_fetch_html(clean_url, headers=headers, timeout=timeout, retries=1)
     except Exception as exc:
         pool_err = exc
         logger.warning("PornTrex pool fetch failed for %s: %s", clean_url, exc)
 
-    text = await _fetch_with_curl_cffi(clean_url, headers=headers)
+    try:
+        text = await asyncio.wait_for(
+            _fetch_with_curl_cffi(clean_url, headers=headers),
+            timeout=15,
+        )
+    except Exception:
+        text = None
     if text:
         return text
 
@@ -584,8 +596,30 @@ def _list_page_candidates(base_url: str, page: int) -> list[str]:
     candidates = [primary]
     parsed = urlparse(_normalize_list_base_url(base_url))
     path = (parsed.path or "/").strip("/")
-    if page <= 1 and path in ("", "latest-updates"):
-        for alt in (BASE_SITE, f"{BASE_SITE}latest-updates/"):
+    root = f"{parsed.scheme or 'https'}://{parsed.netloc or f'www.{SITE_HOST}'}"
+
+    # PornTrex list routes can shift between `/latest/` and `/latest-updates/`.
+    if path == "latest":
+        route_variants = ("latest", "latest-updates")
+    elif path == "latest-updates":
+        route_variants = ("latest-updates", "latest")
+    else:
+        route_variants = (path,)
+
+    for route in route_variants:
+        if not route:
+            continue
+        if page <= 1:
+            alt = f"{root}/{route}/"
+            if alt not in candidates:
+                candidates.append(_sanitize_url(alt))
+        else:
+            for alt in (f"{root}/{route}/{page}/", f"{root}/{route}/?page={page}"):
+                if alt not in candidates:
+                    candidates.append(_sanitize_url(alt))
+
+    if page <= 1 and path in ("", "latest", "latest-updates"):
+        for alt in (BASE_SITE, f"{BASE_SITE}latest/", f"{BASE_SITE}latest-updates/"):
             if alt not in candidates:
                 candidates.append(_sanitize_url(alt))
     return candidates
@@ -599,6 +633,7 @@ def _is_list_page_html(html: str) -> bool:
     return bool(
         re.search(r'data-item-id=["\']\d+["\']', html)
         or re.search(r'class=["\'][^"\']*video-item[^"\']*["\']', html, re.IGNORECASE)
+        or re.search(r'href=["\']/(?:video|embed)/\d+/', html, re.IGNORECASE)
     )
 
 
