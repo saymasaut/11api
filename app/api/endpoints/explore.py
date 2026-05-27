@@ -37,6 +37,7 @@ EXPLORE_SOURCES = [
         searchUrlTemplate="https://xhamster.com/search/{query}",
         sourceId="xhamster",
         disable=False,
+        pageSize=46,
     ),
     ExploreSourceResponse(
         baseUrl="https://www.xnxx.com/",
