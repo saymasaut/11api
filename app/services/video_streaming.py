@@ -7,7 +7,6 @@ from fastapi import HTTPException
 from typing import Any, Optional
 import logging
 import re
-from urllib.parse import quote, urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -324,31 +323,9 @@ async def get_stream_url(url: str, quality: str = "default", api_base_url: str =
         "quality": selected_quality,
         "format": fmt,
     }
-
-    # For HLS streams, return a proxy URL to avoid CORS/Referer restrictions in clients.
-    # Keep the raw upstream URL available for debugging/advanced clients.
-    if fmt.lower() == "hls" and stream_url:
-        parsed = urlparse(url)
-        host_l = parsed.netloc.lower()
-        if any(h in host_l for h in ("pornhub.com", "youporn.com", "redtube.com", "redtube.net", "tube8.com")):
-            api_base = (api_base_url or "").rstrip("/") or "http://localhost:8000"
-            proxy_base = f"{api_base}/api/v1/hls/proxy"
-            referer = f"{parsed.scheme}://{parsed.netloc}/" if parsed.scheme and parsed.netloc else None
-            origin = referer[:-1] if referer and referer.endswith("/") else referer
-
-            proxied = f"{proxy_base}?url={quote(stream_url)}"
-            if referer:
-                proxied += f"&referer={quote(referer)}"
-            if origin:
-                proxied += f"&origin={quote(origin)}"
-
-            response["upstream_stream_url"] = stream_url
-            response["stream_url"] = proxied
-            response["proxied"] = True
-        else:
-            response["proxied"] = False
     
     # Add available_qualities for Pornhub, YouPorn, and RedTube
+    from urllib.parse import urlparse
     parsed_url = urlparse(url)
     if ("pornhub.com" in parsed_url.netloc.lower() or 
         "youporn.com" in parsed_url.netloc.lower() or
