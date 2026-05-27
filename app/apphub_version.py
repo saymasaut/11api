@@ -16,7 +16,7 @@ DOWNLOAD_URLS = {
     "universal": ""
 }
 DOWNLOAD_SIZES = {
-    "arm64-v8a": 23000000,
+    "arm64-v8a": 24000000,
     "armeabi-v7a": 22000000,
     "x86": 23000000,
     "x86_64": 23000000,
