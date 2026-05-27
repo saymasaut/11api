@@ -32,14 +32,10 @@ async def hls_proxy(
     ua = user_agent if user_agent else request.headers.get("user-agent", "Mozilla/5.0")
     if ua:
         headers["User-Agent"] = ua
-    # Prefer explicit query params, but fall back to incoming request headers.
-    # Many clients (e.g. BetterPlayer) send Referer/Origin as headers, not query params.
-    effective_referer = referer or request.headers.get("referer")
-    effective_origin = origin or request.headers.get("origin")
-    if effective_referer:
-        headers["Referer"] = effective_referer
-    if effective_origin:
-        headers["Origin"] = effective_origin
+    if referer:
+        headers["Referer"] = referer
+    if origin:
+        headers["Origin"] = origin
     
     range_header = request.headers.get("range")
     if range_header:
