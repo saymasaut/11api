@@ -10,7 +10,13 @@ from bs4 import BeautifulSoup
 
 
 def can_handle(host: str) -> bool:
-    return host.lower().endswith("xhamster.com")
+    host_l = host.lower().strip()
+    # Support common xHamster mirror domains while avoiding overly-broad substring matches.
+    # Examples: xhamster.com, m.xhamster.com, xhamster.desi, xhamster1.desi, xhamster2.xxx
+    return bool(
+        re.search(r"(^|\.)xhamster(\d+)?\.(com|desi|xxx)$", host_l)
+        or re.search(r"(^|\.)xhaccess\.com$", host_l)
+    )
 
 def get_categories() -> list[dict]:
     import os
