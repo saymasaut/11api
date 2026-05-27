@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import re
-import time
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
@@ -13,7 +12,7 @@ import aiohttp
 import httpx
 from bs4 import BeautifulSoup
 
-from app.core.pool import fetch_html as pool_fetch_html, get_random_user_agent
+from app.core.pool import fetch_html as pool_fetch_html
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +20,13 @@ BASE_SITE = "https://www.porntrex.com/"
 SITE_HOST = "porntrex.com"
 SITE_ALIASES = frozenset({"porntrex.com", "www.porntrex.com"})
 
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
 _DEFAULT_HEADERS = {
+    "User-Agent": _USER_AGENT,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate",
@@ -41,20 +46,6 @@ _VIDEO_HREF_RE = re.compile(
     r'href=["\'](?:https?://(?:www\.)?porntrex\.com)?/video/(\d+)/([^"\']+)/?["\']',
     re.IGNORECASE,
 )
-_REQUEST_LOCK = asyncio.Lock()
-_NEXT_ALLOWED_REQUEST_AT = 0.0
-_MIN_REQUEST_INTERVAL_SECONDS = 1.25
-
-
-async def _throttle_requests() -> None:
-    """Global per-process pacing to reduce upstream rate-limit triggers."""
-    global _NEXT_ALLOWED_REQUEST_AT
-    async with _REQUEST_LOCK:
-        now = time.monotonic()
-        wait_for = _NEXT_ALLOWED_REQUEST_AT - now
-        if wait_for > 0:
-            await asyncio.sleep(wait_for)
-        _NEXT_ALLOWED_REQUEST_AT = time.monotonic() + _MIN_REQUEST_INTERVAL_SECONDS
 
 
 def can_handle(host: str) -> bool:
@@ -77,7 +68,7 @@ def get_categories() -> list[dict]:
 def _browser_headers(referer: str | None = None) -> dict[str, str]:
     """Full browser-like headers on every PornTrex request (stable User-Agent)."""
     headers = dict(_DEFAULT_HEADERS)
-    headers["User-Agent"] = get_random_user_agent()
+    headers["User-Agent"] = _USER_AGENT
     ref = referer or BASE_SITE
     headers["Referer"] = ref
     try:
@@ -120,9 +111,7 @@ async def _fetch_with_curl_cffi(url: str, *, headers: dict[str, str]) -> Optiona
 async def _fetch_with_httpx(url: str, *, headers: dict[str, str]) -> str:
     async with httpx.AsyncClient(
         follow_redirects=True,
-        # Keep this relatively tight; PornTrex sometimes stalls long enough to
-        # create a backlog under load. We'll retry at a higher level.
-        timeout=httpx.Timeout(20.0, connect=12.0),
+        timeout=httpx.Timeout(45.0, connect=20.0),
         headers=headers,
     ) as client:
         resp = await client.get(_sanitize_url(url))
@@ -133,33 +122,32 @@ async def _fetch_with_httpx(url: str, *, headers: dict[str, str]) -> str:
 async def fetch_page(url: str, *, referer: str | None = None) -> str:
     clean_url = _sanitize_url(url)
     headers = _browser_headers(referer)
-    # PornTrex intermittently stalls TLS/connection establishment on some networks.
-    # Keep timeouts reasonable, but not so strict that transient stalls dominate.
-    timeout = aiohttp.ClientTimeout(total=35, connect=15, sock_read=25)
+    timeout = aiohttp.ClientTimeout(total=18, connect=6, sock_read=12)
     pool_err: Exception | None = None
 
-    await _throttle_requests()
+    try:
+        return await pool_fetch_html(clean_url, headers=headers, timeout=timeout, retries=1)
+    except Exception as exc:
+        pool_err = exc
+        logger.warning("PornTrex pool fetch failed for %s: %s", clean_url, exc)
 
     try:
-        # Prefer httpx first: it has been more reliable than the pooled aiohttp path
-        # in the presence of intermittent connect/TLS stalls.
-        return await _fetch_with_httpx(clean_url, headers=headers)
-    except Exception as httpx_err:
-        logger.warning("PornTrex httpx fetch failed for %s: %s", clean_url, httpx_err)
-
-    try:
-        text = await asyncio.wait_for(_fetch_with_curl_cffi(clean_url, headers=headers), timeout=15)
+        text = await asyncio.wait_for(
+            _fetch_with_curl_cffi(clean_url, headers=headers),
+            timeout=15,
+        )
     except Exception:
         text = None
     if text:
         return text
 
     try:
-        return await pool_fetch_html(clean_url, headers=headers, timeout=timeout, retries=2)
-    except Exception as exc:
-        pool_err = exc
-        logger.warning("PornTrex pool fetch failed for %s: %s", clean_url, exc)
-        raise pool_err
+        return await _fetch_with_httpx(clean_url, headers=headers)
+    except Exception as httpx_err:
+        logger.warning("PornTrex httpx fetch failed for %s: %s", clean_url, httpx_err)
+        if pool_err is not None:
+            raise pool_err from httpx_err
+        raise httpx_err
 
 
 def _first_non_empty(*values: Optional[str]) -> Optional[str]:
@@ -530,7 +518,7 @@ async def scrape(url: str) -> dict[str, Any]:
 
 
 _PAGINATED_SECTIONS = frozenset({"latest-updates", "top-rated", "most-popular"})
-_LIST_FETCH_ATTEMPTS = 3
+_LIST_FETCH_ATTEMPTS = 5
 
 
 def _normalize_list_path(path: str) -> str:

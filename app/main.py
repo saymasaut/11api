@@ -288,8 +288,7 @@ async def create_scrape(request: Request, body: ScrapeRequestV1) -> ScrapeRespon
         data = await _scrape_dispatch(str(body.url), body.url.host or "")
         if "thumbnail_url" in data:
             data["thumbnail_url"] = thumbnails.wrap_thumbnail_url(data["thumbnail_url"], api_base)
-        scrape_ttl_seconds = 21600 if porntrex.can_handle(host) else 7200
-        await cache.set(cache_key, data, ttl_seconds=scrape_ttl_seconds)
+        await cache.set(cache_key, data, ttl_seconds=7200)  # Cache scrapes for 2 hours
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail="Upstream returned error") from e
     except Exception as e:
@@ -341,8 +340,7 @@ async def list_videos(request: Request, base_url: str, page: int = 1, limit: int
             for it in items:
                 if "thumbnail_url" in it:
                     it["thumbnail_url"] = thumbnails.wrap_thumbnail_url(it["thumbnail_url"], api_base)
-            list_ttl_seconds = 10800 if porntrex.can_handle(host) else 3600
-            await cache.set(cache_key, items, ttl_seconds=list_ttl_seconds)
+            await cache.set(cache_key, items, ttl_seconds=3600)  # Cache for 1 hour (aggressive)
         
         return [ListItem(**it) for it in items]
     except httpx.HTTPStatusError as e:
