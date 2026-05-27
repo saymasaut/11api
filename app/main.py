@@ -32,7 +32,7 @@ from app.api.endpoints import hls, media, explore, thumbnails, one_xbet, ads, no
 from fastapi import APIRouter
 
 # Scrapers & Models
-from app.scrapers import masa49, xhamster, xnxx, xvideos, pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rule34video, haho, hanime, rouvideo, cg51, oppai, xmoviesforyou, tnaflix, hornysimp, pimpbunny, hentaiser, bollywoodmaal, viralkand, blowjobspro, blackporn24, lesbianporn8, milfporn8, indianporn365, mmsbro, kamababa, desimms2, desiporn, thotsporn, leakedamateurporn, zeenite, uncutmaza, mydesimms, po85, cosxplay, memojav, hohoj, ggjav, porn87, goodav, kanav, missav, jable, tianmei, bindasmood, eporner, porntrex, dotmaal, uncutmasti, zmaal, ulluwebseries, desithothub
+from app.scrapers import masa49, xhamster, xnxx, xvideos, pornhub, youporn, redtube, beeg, spankbang, fapnut, pornxp, hqporner, xxxparodyhd, pornwex, tube8, pornhat, brazzpw, gosexpod, watcherotic, rule34video, haho, hanime, rouvideo, cg51, oppai, xmoviesforyou, tnaflix, hornysimp, pimpbunny, hentaiser, bollywoodmaal, viralkand, blowjobspro, blackporn24, lesbianporn8, milfporn8, indianporn365, mmsbro, kamababa, desimms2, desiporn, thotsporn, leakedamateurporn, zeenite, uncutmaza, mydesimms, po85, cosxplay, memojav, hohoj, ggjav, porn87, goodav, kanav, missav, jable, tianmei, bindasmood, eporner, dotmaal, uncutmasti, zmaal, ulluwebseries, desithothub
 from app.models.schemas import ScrapeResponse, VideoInfoResponse, ListItem, CategoryItem, ScrapeRequest, ListRequest
 
 logging.basicConfig(level=logging.INFO)
@@ -178,7 +178,6 @@ async def _scrape_dispatch(url: str, host: str) -> dict[str, object]:
     if tianmei.can_handle(host): return await tianmei.scrape(url)
     if bindasmood.can_handle(host): return await bindasmood.scrape(url)
     if eporner.can_handle(host): return await eporner.scrape(url)
-    if porntrex.can_handle(host): return await porntrex.scrape(url)
     if dotmaal.can_handle(host): return await dotmaal.scrape(url)
     if uncutmasti.can_handle(host): return await uncutmasti.scrape(url)
     if zmaal.can_handle(host): return await zmaal.scrape(url)
@@ -246,7 +245,6 @@ async def _list_dispatch(base_url: str, host: str, page: int, limit: int) -> lis
     if tianmei.can_handle(host): return await tianmei.list_videos(base_url=base_url, page=page, limit=limit)
     if bindasmood.can_handle(host): return await bindasmood.list_videos(base_url=base_url, page=page, limit=limit)
     if eporner.can_handle(host): return await eporner.list_videos(base_url=base_url, page=page, limit=limit)
-    if porntrex.can_handle(host): return await porntrex.list_videos(base_url=base_url, page=page, limit=limit)
     if dotmaal.can_handle(host): return await dotmaal.list_videos(base_url=base_url, page=page, limit=limit)
     if uncutmasti.can_handle(host): return await uncutmasti.list_videos(base_url=base_url, page=page, limit=limit)
     if zmaal.can_handle(host): return await zmaal.list_videos(base_url=base_url, page=page, limit=limit)
@@ -275,11 +273,7 @@ async def create_scrape(request: Request, body: ScrapeRequestV1) -> ScrapeRespon
     from app.config.settings import settings
     api_base = settings.BASE_URL or str(request.base_url)
     host = body.url.host or ""
-    cache_key = (
-        porntrex.scrape_cache_key(str(body.url))
-        if porntrex.can_handle(host)
-        else f"scrape:{str(body.url)}"
-    )
+    cache_key = f"scrape:{str(body.url)}"
     cached_result = await cache.get(cache_key)
     if cached_result:
         logging.info(f"⚡ Cache HIT for scrape {body.url}")
@@ -320,11 +314,7 @@ async def list_videos(request: Request, base_url: str, page: int = 1, limit: int
         pass
 
     # Check cache (v2 optimization) — use canonical keys for PornTrex
-    cache_key = (
-        porntrex.list_cache_key(base_url, page, limit)
-        if porntrex.can_handle(host)
-        else f"list:{base_url}:p{page}:l{limit}"
-    )
+    cache_key = f"list:{base_url}:p{page}:l{limit}"
     cached_items = await cache.get(cache_key)
     if cached_items:
         logging.info(f"⚡ Cache HIT for list {base_url} page {page}")
@@ -459,7 +449,6 @@ async def get_categories(source: str) -> list[CategoryItem]:
         if s in ("tianmei", "94mt", "94mtcc", "tianmeione"): return [CategoryItem(**c) for c in tianmei.get_categories()]
         if s == "bindasmood" or s == "bindas": return [CategoryItem(**c) for c in bindasmood.get_categories()]
         if s == "eporner": return [CategoryItem(**c) for c in eporner.get_categories()]
-        if s == "porntrex": return [CategoryItem(**c) for c in porntrex.get_categories()]
         if s == "dotmaal" or s == "dot": return [CategoryItem(**c) for c in dotmaal.get_categories()]
         if s == "uncutmasti" or s == "masti": return [CategoryItem(**c) for c in uncutmasti.get_categories()]
         if s == "zmaal": return [CategoryItem(**c) for c in zmaal.get_categories()]
