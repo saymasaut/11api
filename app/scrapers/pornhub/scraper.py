@@ -77,65 +77,78 @@ def _extract_video_streams(html: str) -> dict[str, Any]:
     streams = []
     hls_url = None
     
-    # Strategy: Look for flashvars or mediaDefinitions
-    # Common PH pattern: var flashvars_123 = {...}
-    m = re.search(r'var\s+flashvars_\d+\s*=\s*(\{.*?\});', html, re.DOTALL)
-    if m:
+    def _add_stream(video_url: str, fmt: Optional[str], quality: Any) -> None:
+        nonlocal hls_url
+        if not video_url:
+            return
+
+        fmt_l = (fmt or "").lower().strip()
+        if not fmt_l:
+            if ".m3u8" in video_url.lower():
+                fmt_l = "hls"
+            elif ".mp4" in video_url.lower():
+                fmt_l = "mp4"
+
+        # Normalize/derive quality
+        if isinstance(quality, list):
+            quality = str(quality[0]) if quality else None
+        if quality is not None:
+            quality = str(quality).strip()
+        if not quality:
+            # Try finding /1080P/ or similar patterns
+            m_q = re.search(r'/(\d{3,4})[pP]?/', video_url)
+            if not m_q:
+                m_q = re.search(r'(\d{3,4})[pP]_', video_url)
+            quality = f"{m_q.group(1)}p" if m_q else ("adaptive" if fmt_l == "hls" else "unknown")
+        elif quality.isdigit():
+            quality = f"{quality}p"
+
+        if fmt_l == "hls":
+            hls_url = video_url
+            streams.append({"quality": quality or "adaptive", "url": video_url, "format": "hls"})
+        elif fmt_l == "mp4":
+            streams.append({"quality": quality or "unknown", "url": video_url, "format": "mp4"})
+
+    def _parse_media_definitions(media_defs: Any) -> None:
+        if not isinstance(media_defs, list):
+            return
+        for md in media_defs:
+            if not isinstance(md, dict):
+                continue
+            video_url = md.get("videoUrl") or md.get("video_url") or md.get("url")
+            fmt = md.get("format") or md.get("type")
+            quality = md.get("quality") or md.get("height") or md.get("resolution")
+            _add_stream(video_url=str(video_url).strip() if video_url else "", fmt=str(fmt) if fmt else None, quality=quality)
+
+    # Strategy 1: flashvars patterns (Pornhub has multiple variants)
+    # - var flashvars_123 = {...};
+    # - var flashvars = {...};
+    for pat in (
+        r'var\s+flashvars_\d+\s*=\s*(\{.*?\});',
+        r'var\s+flashvars\s*=\s*(\{.*?\});',
+    ):
+        m = re.search(pat, html, re.DOTALL)
+        if not m:
+            continue
         try:
             data = json.loads(m.group(1))
-            media_defs = data.get("mediaDefinitions", [])
-            for md in media_defs:
-                video_url = md.get("videoUrl")
-                if not video_url: continue
-                
-                fmt = md.get("format") # mp4, hls
-                quality = md.get("quality") # 720p, 1080p, etc
-                
-                # Handle list types safely
-                if isinstance(quality, list): 
-                    if quality:
-                        quality = str(quality[0])
-                    else:
-                        quality = None
-                
-                # Fallback to height if quality is missing
-                if not quality and md.get("height"):
-                     quality = str(md.get("height"))
-
-                if fmt == "hls" or ".m3u8" in video_url:
-                    # Extract quality from URL if strictly "hls" or "adaptive" in metadata
-                    parsed_quality = "adaptive"
-                    
-                    if quality:
-                        if isinstance(quality, str) and quality.isdigit():
-                             parsed_quality = f"{quality}p"
-                        else:
-                             parsed_quality = str(quality)
-                    
-                    # Try regex on URL if quality is not specific
-                    if not parsed_quality or parsed_quality == "adaptive":
-                        # Try finding /1080P/ or similar patterns
-                        m_q = re.search(r'/(\d{3,4})[pP]?/', video_url)
-                        if not m_q:
-                             m_q = re.search(r'(\d{3,4})[pP]_', video_url)
-                             
-                        if m_q:
-                            parsed_quality = f"{m_q.group(1)}p"
-
-                    hls_url = video_url
-                    streams.append({
-                        "quality": parsed_quality,
-                        "url": video_url,
-                        "format": "hls"
-                    })
-                elif fmt == "mp4":
-                     streams.append({
-                        "quality": str(quality) if quality else "unknown",
-                        "url": video_url,
-                        "format": "mp4"
-                    })
+            _parse_media_definitions(data.get("mediaDefinitions", []))
         except Exception:
             pass
+
+    # Strategy 2: raw mediaDefinitions array embedded in scripts
+    # - mediaDefinitions: [...]
+    # - "mediaDefinitions":[...]
+    if not streams:
+        m = re.search(r'mediaDefinitions"\s*:\s*(\[[\s\S]*?\])', html, re.DOTALL)
+        if not m:
+            m = re.search(r'mediaDefinitions\s*:\s*(\[[\s\S]*?\])', html, re.DOTALL)
+        if m:
+            try:
+                media_defs = json.loads(m.group(1))
+                _parse_media_definitions(media_defs)
+            except Exception:
+                pass
             
     # Determine default
     default_url = None
