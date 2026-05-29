@@ -11,8 +11,19 @@ from bs4 import BeautifulSoup
 from app.core.pool import fetch_html as pool_fetch_html
 
 BASE_SITE = "https://jable.tv/"
+DEFAULT_BROWSE_URL = "https://jable.tv/latest-updates/"
 SITE_HOST = "jable.tv"
 SITE_ALIASES = frozenset({"jable.tv", "www.jable.tv"})
+
+_DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "zh-TW,zh;q=0.9,en-US,en;q=0.8",
+    "Referer": BASE_SITE,
+}
 
 _VIDEO_PAGE_RE = re.compile(
     r"^https?://(?:www\.)?jable\.tv(?:/s\d+)?/videos/(?P<slug>[a-z0-9-]+)/?$",
@@ -20,7 +31,7 @@ _VIDEO_PAGE_RE = re.compile(
 )
 _VIDEO_HREF_RE = re.compile(r"/(?:s\d+/)?videos/([a-z0-9-]+)/?", re.IGNORECASE)
 _HLS_URL_RE = re.compile(
-    r"var\s+hlsUrl\s*=\s*['\"](https?://[^'\"]+\.m3u8[^'\"]*)['\"]",
+    r"""(?:var|const|let)\s+hlsUrl\s*=\s*['"](https?://[^'"]+\.m3u8[^'"]*)['"]""",
     re.IGNORECASE,
 )
 _M3U8_RE = re.compile(r"https?://[^\s\"'<>]+\.m3u8[^\s\"'<>]*", re.IGNORECASE)
@@ -44,14 +55,53 @@ def get_categories() -> list[dict]:
         return []
 
 
+def _is_cloudflare_challenge(html: str) -> bool:
+    if not html:
+        return True
+    low = html.lower()
+    return (
+        "just a moment" in low
+        or "cf_chl_opt" in low
+        or "challenge-platform" in low
+        or "enable javascript and cookies" in low
+    )
+
+
+async def _fetch_with_curl_cffi(url: str, *, referer: str | None = None) -> str | None:
+    try:
+        from curl_cffi.requests import AsyncSession
+    except ImportError:
+        return None
+
+    headers = dict(_DEFAULT_HEADERS)
+    headers["Referer"] = referer or BASE_SITE
+
+    for imp in ("chrome120", "chrome110", "safari15_3"):
+        try:
+            async with AsyncSession(impersonate=imp, headers=headers, timeout=45.0) as client:
+                resp = await client.get(url)
+                if resp.status_code != 200:
+                    continue
+                text = resp.text
+                if _is_cloudflare_challenge(text):
+                    continue
+                return text
+        except Exception:
+            continue
+    return None
+
+
 async def fetch_page(url: str, *, referer: str | None = None) -> str:
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "zh-TW,zh;q=0.9,en-US,en;q=0.8",
-        "Referer": referer or BASE_SITE,
-    }
-    return await pool_fetch_html(url, headers=headers)
+    text = await _fetch_with_curl_cffi(url, referer=referer)
+    if text:
+        return text
+
+    headers = dict(_DEFAULT_HEADERS)
+    headers["Referer"] = referer or BASE_SITE
+    html = await pool_fetch_html(url, headers=headers)
+    if _is_cloudflare_challenge(html):
+        raise ValueError(f"Blocked by Cloudflare: {url}")
+    return html
 
 
 def _first_non_empty(*values: Optional[str]) -> Optional[str]:
@@ -338,9 +388,19 @@ async def scrape(url: str) -> dict[str, Any]:
 
     page_url = _canonical_video_url(slug)
     raw = (url or "").strip().split("#", 1)[0].split("?", 1)[0]
-    fetch_urls = [page_url]
-    if raw not in fetch_urls:
-        fetch_urls.append(raw if raw.endswith("/") else raw + "/")
+    raw = raw if raw.endswith("/") else raw + "/"
+    fetch_urls = [
+        page_url,
+        f"https://{SITE_HOST}/s0/videos/{slug}/",
+        raw,
+    ]
+    deduped: list[str] = []
+    seen_fetch: set[str] = set()
+    for candidate in fetch_urls:
+        if candidate and candidate not in seen_fetch:
+            seen_fetch.add(candidate)
+            deduped.append(candidate)
+    fetch_urls = deduped
 
     html: str | None = None
     used_url = page_url
@@ -359,9 +419,10 @@ async def scrape(url: str) -> dict[str, Any]:
 
 
 async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[dict[str, Any]]:
-    page_url = _build_list_page_url(base_url, page)
+    normalized_base = (base_url or "").strip() or DEFAULT_BROWSE_URL
+    page_url = _build_list_page_url(normalized_base, page)
     try:
-        html = await fetch_page(page_url, referer=base_url or BASE_SITE)
+        html = await fetch_page(page_url, referer=normalized_base or BASE_SITE)
     except Exception:
         return []
     soup = BeautifulSoup(html, "lxml")
