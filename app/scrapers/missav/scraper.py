@@ -52,6 +52,41 @@ _RESERVED_SLUGS = frozenset(
         "upload",
     }
 )
+# Browse/menu slugs (hyphenated) that must not be treated as video pages.
+_STATIC_BROWSE_SLUGS = frozenset(
+    {
+        "featured",
+        "english-subtitle",
+        "chinese-subtitle",
+        "uncensored-leak",
+        "today-hot",
+        "weekly-hot",
+        "monthly-hot",
+        "tokyohot",
+        "caribbeancom",
+        "caribbeancompr",
+        "10musume",
+        "pacopacomama",
+        "gachinco",
+        "marriedslash",
+        "naughty4610",
+        "naughty0930",
+        "xxxav",
+        "madou",
+        "twav",
+        "furuke",
+        "ara",
+        "scute",
+        "maan",
+        "fc2",
+        "siro",
+        "luxu",
+        "gana",
+        "heyzo",
+        "1pondo",
+    }
+)
+_browse_slugs_cache: frozenset[str] | None = None
 
 _DM_PREFIX_RE = re.compile(r"^dm\d+$", re.IGNORECASE)
 _VIDEO_PAGE_RE = re.compile(
@@ -93,6 +128,24 @@ def get_categories() -> list[dict]:
             return json.load(f)
     except Exception:
         return []
+
+
+def _browse_slugs() -> frozenset[str]:
+    global _browse_slugs_cache
+    if _browse_slugs_cache is not None:
+        return _browse_slugs_cache
+    slugs: set[str] = set(_RESERVED_SLUGS) | set(_STATIC_BROWSE_SLUGS)
+    for cat in get_categories():
+        cat_id = str(cat.get("id") or "").strip().lower()
+        if cat_id:
+            slugs.add(cat_id)
+        cat_url = str(cat.get("url") or "").strip()
+        if cat_url:
+            parts = [p for p in urlparse(cat_url).path.split("/") if p]
+            if parts:
+                slugs.add(parts[-1].lower())
+    _browse_slugs_cache = frozenset(slugs)
+    return _browse_slugs_cache
 
 
 async def fetch_page(url: str, *, referer: str | None = None) -> str:
@@ -151,7 +204,7 @@ def _format_duration_seconds(raw: str | None) -> Optional[str]:
 
 def _is_video_slug(slug: str) -> bool:
     s = (slug or "").lower().strip("/")
-    if not s or s in _RESERVED_SLUGS:
+    if not s or s in _browse_slugs():
         return False
     if _DM_PREFIX_RE.match(s):
         return False
@@ -159,8 +212,10 @@ def _is_video_slug(slug: str) -> bool:
         return False
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", s):
         return False
-    # Browse slugs are short (fc2, siro); videos use hyphenated codes (fc2-ppv-1144330).
-    return "-" in s
+    # Browse labels (fc2, siro) are single tokens; JAV codes are hyphenated with digits.
+    if "-" not in s:
+        return False
+    return bool(re.search(r"\d", s))
 
 
 def _parse_video_path_parts(parts: list[str]) -> tuple[Optional[str], Optional[str]]:
@@ -395,27 +450,6 @@ def _parse_list_items(soup: BeautifulSoup, *, limit: int) -> list[dict[str, Any]
                 "tags": None,
             }
         )
-
-    if len(items) < limit:
-        for a in soup.select('a[href*="missav.ai/"], a[href^="/en/"], a[href^="/cn/"]'):
-            if len(items) >= limit:
-                break
-            url = _normalize_video_href(a.get("href") or "")
-            if not url or url in seen:
-                continue
-            seen.add(url)
-            title = _clean_title(a.get_text(strip=True) or str(a.get("alt") or "")) or "Unknown Video"
-            items.append(
-                {
-                    "url": url,
-                    "title": title,
-                    "thumbnail_url": None,
-                    "duration": None,
-                    "views": None,
-                    "uploader_name": None,
-                    "tags": None,
-                }
-            )
 
     return items[:limit]
 
