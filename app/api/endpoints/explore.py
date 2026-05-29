@@ -496,7 +496,7 @@ EXPLORE_SOURCES = [
         pageSize=24,
     ),
     ExploreSourceResponse(
-        baseUrl="https://missav.ai/dm539/new",
+        baseUrl="https://missav.ai/dm265/en",
         nickname="MissAV",
         favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/missav.ico",
         accentColor="#F43F5E",

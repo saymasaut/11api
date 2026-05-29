@@ -12,6 +12,7 @@ from app.core.pool import fetch_html as pool_fetch_html
 
 BASE_SITE = "https://missav.ai/"
 SITE_HOST = "missav.ai"
+DEFAULT_BROWSE_URL = "https://missav.ai/dm265/en"
 SITE_ALIASES = frozenset({"missav.ai", "www.missav.ai", "missav.ws", "www.missav.ws"})
 
 _LOCALES = frozenset(
@@ -213,13 +214,39 @@ def _locale_from_url(url: str) -> str:
 
 def _canonical_video_url(dvd_id: str, *, locale: str = "en") -> str:
     dvd = (dvd_id or "").lower().strip("/")
-    loc = (locale or "en").lower()
+    loc = (locale or "en").lower().split("-")[0]
+    if loc not in _LOCALES:
+        loc = "en"
     return f"https://{SITE_HOST}/{loc}/{dvd}"
+
+
+def _normalize_browse_url(url: str) -> str:
+    """Insert locale into dm-prefixed browse paths (dm539/new -> dm539/en/new)."""
+    raw = (url or "").strip()
+    if not raw:
+        return DEFAULT_BROWSE_URL
+    if not raw.startswith("http"):
+        raw = f"{BASE_SITE.rstrip('/')}/{raw.lstrip('/')}"
+    parsed = urlparse(raw)
+    if not _is_supported_host(parsed.netloc):
+        return raw
+    parts = [p for p in (parsed.path or "").split("/") if p]
+    if not parts:
+        return DEFAULT_BROWSE_URL
+    if _DM_PREFIX_RE.match(parts[0]) and len(parts) == 1:
+        return DEFAULT_BROWSE_URL
+    if _DM_PREFIX_RE.match(parts[0]):
+        i = 1
+        if i < len(parts) and parts[i].lower().split("-")[0] not in _LOCALES:
+            parts.insert(i, "en")
+    netloc = SITE_HOST if _is_supported_host(parsed.netloc) else parsed.netloc
+    path = "/" + "/".join(parts)
+    return urlunparse((parsed.scheme or "https", netloc, path, "", parsed.query, ""))
 
 
 def _normalize_video_href(href: str) -> Optional[str]:
     href = (href or "").strip()
-    if not href:
+    if not href or href == "#":
         return None
     if href.startswith("//"):
         href = f"https:{href}"
@@ -314,6 +341,14 @@ def _streams_from_player(html: str, *, dvd_id: str) -> dict[str, Any]:
     }
 
 
+def _thumbnail_video_href(block: Any) -> Optional[str]:
+    for link in block.select("a[href]"):
+        url = _normalize_video_href(link.get("href") or "")
+        if url:
+            return url
+    return None
+
+
 def _parse_list_items(soup: BeautifulSoup, *, limit: int) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -321,20 +356,20 @@ def _parse_list_items(soup: BeautifulSoup, *, limit: int) -> list[dict[str, Any]
     for block in soup.select("div.thumbnail"):
         if len(items) >= limit:
             break
-        link = block.select_one('a[href*="missav.ai/"]')
-        if not link:
+        url = _thumbnail_video_href(block)
+        if not url:
             continue
-        url = _normalize_video_href(link.get("href") or "")
         if not url or url in seen:
             continue
         seen.add(url)
 
         title_el = block.select_one(".text-sm a") or block.select_one("a[alt]")
+        alt_link = block.select_one("a[alt]")
         img = block.select_one("img[data-src], img[alt]")
         title = _clean_title(
             _first_non_empty(
                 title_el.get_text(" ", strip=True) if title_el else None,
-                str(link.get("alt") or "").strip(),
+                str(alt_link.get("alt") or "").strip() if alt_link else None,
                 img.get("alt") if img else None,
             )
         ) or "Unknown Video"
@@ -362,7 +397,7 @@ def _parse_list_items(soup: BeautifulSoup, *, limit: int) -> list[dict[str, Any]
         )
 
     if len(items) < limit:
-        for a in soup.select('a[href*="missav.ai/"]'):
+        for a in soup.select('a[href*="missav.ai/"], a[href^="/en/"], a[href^="/cn/"]'):
             if len(items) >= limit:
                 break
             url = _normalize_video_href(a.get("href") or "")
@@ -386,7 +421,7 @@ def _parse_list_items(soup: BeautifulSoup, *, limit: int) -> list[dict[str, Any]
 
 
 def _build_list_page_url(base_url: str, page: int) -> str:
-    raw = (base_url or "").strip()
+    raw = _normalize_browse_url(base_url or DEFAULT_BROWSE_URL)
     if not raw.startswith("http"):
         raw = f"{BASE_SITE.rstrip('/')}/{raw.lstrip('/')}"
     parsed = urlparse(raw)
@@ -519,9 +554,10 @@ async def scrape(url: str) -> dict[str, Any]:
 
 
 async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[dict[str, Any]]:
-    page_url = _build_list_page_url(base_url, page)
+    normalized_base = _normalize_browse_url(base_url or DEFAULT_BROWSE_URL)
+    page_url = _build_list_page_url(normalized_base, page)
     try:
-        html = await fetch_page(page_url, referer=base_url or BASE_SITE)
+        html = await fetch_page(page_url, referer=normalized_base or BASE_SITE)
     except Exception:
         return []
     soup = BeautifulSoup(html, "lxml")
