@@ -16,10 +16,10 @@ router = APIRouter()
 ONE_XBET_SITE_URL = "https://1xlite-08668.world/en"
 ONE_XBET_LIVE_URL = "https://1xlite-08668.world/en/live"
 ONE_XBET_OFFICIAL_LIVE_BEST_GAMES_URL = (
-    "https://5y7xvr1pm3q.com/MainFeedLive/mobile/v1/bestGames"
+    "https://fj2bdvd3ocqznm.com/MainFeedLive/mobile/v1/bestGames"
 )
 ONE_XBET_OFFICIAL_PREMATCH_BEST_GAMES_URL = (
-    "https://5y7xvr1pm3q.com/MainFeedLine/mobile/v1/bestGames"
+    "https://fj2bdvd3ocqznm.com/MainFeedLine/mobile/v1/bestGames"
 )
 ONE_XBET_OFFICIAL_BEST_GAMES_PARAMS = {
     "cfView": "3",
