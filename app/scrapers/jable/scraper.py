@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 from app.core.pool import fetch_html as pool_fetch_html
 
 BASE_SITE = "https://jable.tv/"
-DEFAULT_BROWSE_URL = "https://jable.tv/latest-updates/"
+DEFAULT_BROWSE_URL = "https://jable.tv/"
 SITE_HOST = "jable.tv"
 SITE_ALIASES = frozenset({"jable.tv", "www.jable.tv"})
 

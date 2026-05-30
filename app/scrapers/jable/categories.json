@@ -1,4 +1,5 @@
 [
+  { "id": "home", "name": "Home", "url": "https://jable.tv/" },
   { "id": "latest", "name": "Latest Updates", "url": "https://jable.tv/latest-updates/" },
   { "id": "hot", "name": "Hot", "url": "https://jable.tv/hot/" },
   { "id": "new-release", "name": "New Release", "url": "https://jable.tv/new-release/" },
