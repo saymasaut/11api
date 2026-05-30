@@ -50,9 +50,31 @@ def get_categories() -> list[dict]:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         json_path = os.path.join(current_dir, "categories.json")
         with open(json_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            raw = json.load(f)
     except Exception:
         return []
+    out: list[dict] = []
+    seen_urls: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        cat_id = str(item.get("id") or "").strip()
+        name = str(item.get("name") or cat_id).strip()
+        url = str(item.get("url") or "").strip()
+        if not cat_id or not url:
+            continue
+        if not url.startswith("http"):
+            url = urljoin(BASE_SITE, url.lstrip("/"))
+        url = url if url.endswith("/") else f"{url}/"
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        out.append({"id": cat_id, "name": name, "url": url})
+    return out
+
+
+def _category_ids() -> frozenset[str]:
+    return frozenset(c.get("id", "").lower() for c in get_categories() if c.get("id"))
 
 
 def _is_cloudflare_challenge(html: str) -> bool:
@@ -144,16 +166,32 @@ def _normalize_views(text: str | None) -> Optional[str]:
     return digits or None
 
 
+def _is_video_slug(slug: str) -> bool:
+    s = (slug or "").lower().strip("/")
+    if not s or s in _category_ids():
+        return False
+    if s in ("categories", "tags", "models", "actors", "videos"):
+        return False
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", s):
+        return False
+    # JAV release slugs are hyphenated and include digits (e.g. start-579, fc2-ppv-123).
+    return "-" in s and bool(re.search(r"\d", s))
+
+
 def _extract_slug(url: str) -> Optional[str]:
     raw = (url or "").strip().split("#", 1)[0].split("?", 1)[0]
     m = _VIDEO_PAGE_RE.match(raw if raw.endswith("/") else raw + "/")
     if m:
-        return m.group("slug").lower()
+        slug = m.group("slug").lower()
+        return slug if _is_video_slug(slug) else None
     parsed = urlparse(raw)
     if (parsed.netloc or "").lower().replace("www.", "") != SITE_HOST:
         return None
     m2 = _VIDEO_HREF_RE.search(parsed.path or "")
-    return m2.group(1).lower() if m2 else None
+    if not m2:
+        return None
+    slug = m2.group(1).lower()
+    return slug if _is_video_slug(slug) else None
 
 
 def _canonical_video_url(slug: str) -> str:
@@ -213,8 +251,11 @@ def _streams_from_html(html: str) -> dict[str, Any]:
 def _parse_list_items(soup: BeautifulSoup, *, limit: int) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
+    blocks = soup.select("div.video-img-box")
+    if not blocks:
+        blocks = soup.select("div.img-box")
 
-    for block in soup.select("div.video-img-box"):
+    for block in blocks:
         if len(items) >= limit:
             break
         link = block.select_one('.img-box a[href*="/videos/"]') or block.select_one(
@@ -224,6 +265,9 @@ def _parse_list_items(soup: BeautifulSoup, *, limit: int) -> list[dict[str, Any]
             continue
         url = _normalize_video_href(link.get("href") or "")
         if not url or url in seen:
+            continue
+        slug = _extract_slug(url)
+        if not slug:
             continue
         seen.add(url)
 
@@ -262,23 +306,22 @@ def _parse_list_items(soup: BeautifulSoup, *, limit: int) -> list[dict[str, Any]
 
 
 def _build_list_page_url(base_url: str, page: int) -> str:
-    raw = (base_url or "").strip()
+    raw = (base_url or "").strip() or DEFAULT_BROWSE_URL
     if not raw.startswith("http"):
         raw = urljoin(BASE_SITE, raw.lstrip("/"))
     parsed = urlparse(raw)
-    path = (parsed.path or "/").rstrip("/") or "/"
+    path = (parsed.path or "").strip("/")
     page_num = max(1, int(page) if page else 1)
 
     m = _PATH_PAGE_SUFFIX_RE.match(path)
-    if m:
-        base_path = m.group(1) or "/"
-    else:
-        base_path = path
+    base_path = (m.group(1) if m else path).strip("/")
 
     if page_num <= 1:
-        new_path = f"{base_path}/" if base_path != "/" else "/"
+        new_path = f"/{base_path}/" if base_path else "/"
+    elif not base_path:
+        new_path = f"/{page_num}/"
     else:
-        new_path = f"{base_path}/{page_num}/"
+        new_path = f"/{base_path}/{page_num}/"
 
     return urlunparse(
         (
