@@ -146,6 +146,7 @@ EXPLORE_SOURCES = [
         searchUrlTemplate="https://xpxp.eu/search?q={query}",
         sourceId="pornxp",
         disable=False,
+        pageSize=36,
     ),
     ExploreSourceResponse(
         baseUrl="https://hqporner.com/",
