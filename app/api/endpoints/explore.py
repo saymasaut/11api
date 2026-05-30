@@ -509,7 +509,7 @@ EXPLORE_SOURCES = [
         pageSize=32,
     ),
     ExploreSourceResponse(
-        baseUrl="https://jable.tv/latest-updates/",
+        baseUrl="https://jable.tv/",
         nickname="Jable",
         favicon="https://raw.githubusercontent.com/freelancermilonid132bd-ui/apphub/refs/heads/main/logo/javel.png",
         accentColor="#6EADA3",
