@@ -4,9 +4,12 @@ from __future__ import annotations
 import json
 import re
 from typing import Any, Optional
+from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
+
+from app.core.pool import fetch_html
 
 
 def can_handle(host: str) -> bool:
@@ -20,13 +23,28 @@ def can_handle(host: str) -> bool:
 
 def get_categories() -> list[dict]:
     import os
+
     try:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         json_path = os.path.join(current_dir, "categories.json")
-        with open(json_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        with open(json_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
     except Exception:
         return []
+
+    out: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        cat_url = str(item.get("url") or "").strip()
+        if not name or not cat_url:
+            continue
+        entry = {"name": name, "url": cat_url}
+        if item.get("video_count") is not None:
+            entry["video_count"] = item.get("video_count")
+        out.append(entry)
+    return out
 
 
 def _best_image_url(img: Any) -> Optional[str]:
@@ -46,9 +64,6 @@ def _find_duration_like_text(node: Any) -> Optional[str]:
         return None
     m = re.search(r"\b(?:\d{1,2}:){1,2}\d{2}\b", text)
     return m.group(0) if m else None
-
-
-from app.core.pool import pool, fetch_html
 
 
 def _first_non_empty(*values: Optional[str]) -> Optional[str]:
@@ -125,6 +140,69 @@ def _extract_initials_data(html: str) -> dict[str, Any]:
         return {}
     parsed = _parse_balanced_json(html, m.end() - 1)
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _collect_video_thumb_props(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Gather video cards from layout/search/category blocks in window.initials."""
+    props: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_from(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        vtp = node.get("videoThumbProps")
+        if not isinstance(vtp, list):
+            return
+        for item in vtp:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("id") or item.get("pageURL") or "")
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            props.append(item)
+
+    for root_key in ("layoutPage", "searchResult", "pagesCategoryComponent"):
+        root = data.get(root_key)
+        if not isinstance(root, dict):
+            continue
+        add_from(root)
+        for child in root.values():
+            if isinstance(child, dict):
+                add_from(child)
+
+    return props
+
+
+def _pagination_url_from_initials(data: dict[str, Any], page: int) -> Optional[str]:
+    if page <= 1:
+        return None
+    for container_key in ("layoutPage", "pagesCategoryComponent"):
+        pag = (data.get(container_key) or {}).get("paginationProps")
+        if not isinstance(pag, dict):
+            continue
+        template = str(pag.get("pageLinkTemplate") or "")
+        if "{#}" in template:
+            return template.replace("{#}", str(page))
+        first = str(pag.get("pageLinkFirst") or "").strip()
+        if first:
+            return f"{first.rstrip('/')}/{page}"
+    return None
+
+
+def _is_video_list_url(href: str) -> bool:
+    """Filter out non-watch links that still contain /videos/."""
+    path = (href or "").split("?", 1)[0].rstrip("/").lower()
+    if "/videos/" not in path:
+        return False
+    slug = path.rsplit("/videos/", 1)[-1]
+    if not slug or slug in ("", "index"):
+        return False
+    banned = ("search", "categories", "tags", "photos", "creators", "channels")
+    if slug in banned or any(f"/{b}/" in path for b in banned):
+        return False
+    return True
 
 
 def _parse_json_ld(soup: BeautifulSoup) -> list[dict[str, Any]]:
@@ -360,47 +438,54 @@ def parse_page(html: str, url: str) -> dict[str, Any]:
     # ZERO-COST VIDEO EXTRACTION
     video_data = _extract_video_data(html)
 
-    # Related Videos Extraction
-    related_videos = []
-    # xHamster uses various containers, often 'div.related-videos' or list loops
-    # Using a generic selector closer to what list_videos uses
-    
-    # Try finding the related container
-    rel_container = soup.find(class_=re.compile(r"related-videos|upsell-videos"))
+    related_videos: list[dict[str, Any]] = []
+    rel_container = (
+        soup.find(class_=re.compile(r"related-videos|upsell-videos|thumb-list--related", re.I))
+        or soup.select_one(".thumb-list--related, [data-block='related'], section.related")
+    )
+    thumb_links: list[Any] = []
     if rel_container:
-         # xHamster video cards
-         for a in rel_container.find_all("a", class_="video-thumb__image-container"):
-             try:
-                 href = a.get("href")
-                 if not href: continue
-                 
-                 # Title usually in sibling or specific attr
-                 # xHamster structure is complex, often separate title container
-                 # Try finding parent card
-                 card = a.find_parent(class_="video-thumb")
-                 if not card: continue
-                 
-                 t_el = card.find(class_="video-thumb__info__name")
-                 r_title = _text(t_el)
-                 
-                 # Image
-                 r_img = a.find("img") or a.find("noscript").find("img") # xhamster uses lazy load
-                 if not r_img: r_img = a.find("img")
-                 r_thumb = _best_image_url(r_img)
-                 
-                 # Duration
-                 d_el = card.find(class_=re.compile("duration"))
-                 r_dur = _text(d_el)
+        thumb_links = rel_container.find_all("a", class_="video-thumb__image-container")
+    if not thumb_links:
+        main = soup.select_one("main") or soup
+        thumb_links = main.find_all("a", class_="video-thumb__image-container")
 
-                 related_videos.append({
-                    "url": href,
+    for a in thumb_links:
+        try:
+            href = a.get("href")
+            if not href or not _is_video_list_url(href):
+                continue
+
+            card = a.find_parent(class_="video-thumb") or a.find_parent(
+                class_=re.compile(r"thumb-list|video-thumb", re.I)
+            )
+            if not card:
+                continue
+
+            t_el = card.find(class_=re.compile(r"video-thumb.*name|thumb-image-container__title", re.I))
+            r_title = _text(t_el)
+
+            img_el = a.find("img")
+            ns = a.find("noscript")
+            if ns:
+                img_el = ns.find("img") or img_el
+            r_thumb = _best_image_url(img_el)
+
+            d_el = card.find(class_=re.compile("duration", re.I))
+            r_dur = _text(d_el)
+
+            related_videos.append(
+                {
+                    "url": urljoin(url, href),
                     "title": r_title,
                     "thumbnail_url": r_thumb,
-                    "duration": r_dur
-                 })
-                 if len(related_videos) >= 10: break
-             except Exception:
-                 continue
+                    "duration": r_dur,
+                }
+            )
+            if len(related_videos) >= 10:
+                break
+        except Exception:
+            continue
 
     # Preview Extraction
     preview_url = None
@@ -505,6 +590,18 @@ def _append_stream(
     )
 
 
+def _prefer_h264_m3u8(urls: list[str]) -> Optional[str]:
+    if not urls:
+        return None
+    h264 = [u for u in urls if ".h264." in u.lower()]
+    if h264:
+        return h264[0]
+    non_av1 = [u for u in urls if ".av1." not in u.lower()]
+    if non_av1:
+        return non_av1[0]
+    return urls[0]
+
+
 def _extract_hls_from_sources(hls: Any) -> Optional[str]:
     """Resolve a playable HLS URL from xplayer sources (shape varies by page version)."""
     if isinstance(hls, str):
@@ -513,12 +610,26 @@ def _extract_hls_from_sources(hls: Any) -> Optional[str]:
         return None
     if _is_playable_url(hls.get("url")):
         return _normalize_stream_url(hls.get("url"))
-    # New layout: {"av1": {"url": "<hex>"}, "h264": {"url": "<hex>", "fallback": "..."}}
+
+    # Prefer H.264 over AV1 for device compatibility (matches mobile client behavior).
+    for codec in ("h264", "hevc", "vp9", "av1"):
+        entry = hls.get(codec)
+        if isinstance(entry, str) and _is_playable_url(entry):
+            return _normalize_stream_url(entry)
+        if isinstance(entry, dict):
+            for key in ("url", "fallback", "masterUrl", "master"):
+                val = entry.get(key)
+                if _is_playable_url(val):
+                    return _normalize_stream_url(val)
+
     for entry in hls.values():
         if isinstance(entry, str) and _is_playable_url(entry):
             return _normalize_stream_url(entry)
-        if isinstance(entry, dict) and _is_playable_url(entry.get("url")):
-            return _normalize_stream_url(entry.get("url"))
+        if isinstance(entry, dict):
+            for key in ("url", "fallback", "masterUrl", "master"):
+                val = entry.get(key)
+                if _is_playable_url(val):
+                    return _normalize_stream_url(val)
     return None
 
 
@@ -569,16 +680,18 @@ def _extract_standard_streams(standard: Any) -> list[dict[str, Any]]:
 
 
 def _find_hls_in_html(html: str) -> Optional[str]:
+    found: list[str] = []
     for pattern in (
-        r"https://video-cf\.xhcdn\.com[^\"'\s]+\.m3u8",
+        r"https://video(?:-cf|-nss)?\.xhcdn\.com[^\"'\s]+\.m3u8[^\"'\s]*",
         r'["\'](https:[^"\']+\.m3u8[^"\']*)["\']',
     ):
-        m = re.search(pattern, html)
-        if m:
+        for m in re.finditer(pattern, html, re.IGNORECASE):
             candidate = m.group(1) if m.lastindex else m.group(0)
             if _is_playable_url(candidate):
-                return _normalize_stream_url(candidate)
-    return None
+                normalized = _normalize_stream_url(candidate)
+                if normalized and normalized not in found:
+                    found.append(normalized)
+    return _prefer_h264_m3u8(found)
 
 
 def _extract_video_data(html: str) -> dict[str, Any]:
@@ -674,7 +787,7 @@ def _extract_video_data(html: str) -> dict[str, Any]:
     return {
         "streams": streams,
         "default": default_url,
-        "has_video": bool(streams) or hls_url is not None,
+        "has_video": bool(streams),
     }
 
 
@@ -695,16 +808,27 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 20) -> list[dic
         candidates.append(root)
     else:
         if "/categories/" in root or "/photos/categories/" in root:
-             candidates.append(f"{root.rstrip('/')}/{page}")
+            candidates.append(f"{root.rstrip('/')}/{page}")
 
         candidates.extend(
             [
                 f"{root}?page={page}",
+                f"{root.rstrip('/')}/{page}",
                 f"{root}newest/{page}/",
                 f"{root}newest/{page}",
                 f"{root}videos?page={page}",
             ]
         )
+
+        # Use pagination template from page 1 when available (category/search pages).
+        try:
+            seed_html = await fetch_html(root)
+            seed_data = _extract_initials_data(seed_html)
+            pag_url = _pagination_url_from_initials(seed_data, page)
+            if pag_url:
+                candidates.insert(0, pag_url)
+        except Exception:
+            pass
 
     html = ""
     used = ""
@@ -730,30 +854,13 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 20) -> list[dic
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    # Attempt to extract from window.initials
-    video_props = []
     data = _extract_initials_data(html)
-    if data:
-        try:
-            # Possible paths for videoThumbProps
-            paths = [
-                data.get("layoutPage", {}).get("videoListProps", {}).get("videoThumbProps", []),
-                data.get("layoutPage", {}).get("trendingVideoListProps", {}).get("videoThumbProps", []),
-                data.get("searchResult", {}).get("videoThumbProps", []),
-                data.get("pagesCategoryComponent", {}).get("trendingVideoListProps", {}).get("videoThumbProps", []),
-                data.get("pagesCategoryComponent", {}).get("videoListProps", {}).get("videoThumbProps", []),
-            ]
-            for val in paths:
-                if isinstance(val, list) and val:
-                    video_props = val
-                    break
-        except Exception:
-            pass
+    video_props = _collect_video_thumb_props(data) if data else []
 
     if video_props:
         for vid in video_props:
             url = vid.get("pageURL")
-            if not url:
+            if not url or not _is_video_list_url(str(url)):
                 continue
                 
             try:
@@ -799,17 +906,14 @@ async def list_videos(base_url: str, page: int = 1, limit: int = 20) -> list[dic
         # Fallback to DOM parsing
         for a in soup.select('a[href*="/videos/"]'):
             href = a.get("href")
-            if not href:
+            if not href or not _is_video_list_url(href):
                 continue
-    
-            if "/videos/" not in href:
-                continue
-    
+
             try:
                 abs_url = str(base_uri.join(href))
             except Exception:
                 continue
-    
+
             if abs_url in seen:
                 continue
     
