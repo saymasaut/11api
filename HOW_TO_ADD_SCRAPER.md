@@ -3192,4 +3192,76 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=motherless"
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://motherless.com/EE97006"
 ```
 
+## YouJizz (youjizz.com) Implementation Notes
+
+[YouJizz](https://www.youjizz.com/) is a mobile-oriented tube site. Watch URLs use a numeric ID in the path: `/videos/{slug}-{id}.html` or `/videos/-{id}.html`. Streams are exposed in a `dataEncodings` JSON array on the watch page (signed MP4/HLS CDN URLs on `*.youjizz.com`).
+
+### Host aliases
+
+- `youjizz.com`
+- `www.youjizz.com`
+
+### Listing and pagination (`list_videos`)
+
+- Popular: `https://www.youjizz.com/most-popular/1.html`
+- Newest: `https://www.youjizz.com/newest-clips/1.html`
+- Top: `/top-week/1.html`, `/top-month/1.html`, `/top/1.html`
+- Tags: `https://www.youjizz.com/tags/{slug}/1.html`
+- Parse `div.video-thumb[data-videoId]` → `.video-title a`, `span.time`, `.format-views`, `img[data-original]`
+- Pagination: replace page segment in path — e.g. `/most-popular/2.html` for page 2 (`#urlPattern` is `/most-popular/(:num).html`)
+
+### Metadata and streams (`scrape`)
+
+- Watch URL: `https://www.youjizz.com/videos/{slug}-{id}.html`
+- Embed URL: `https://www.youjizz.com/videos/embed/{id}`
+- **Primary streams:** parse `dataEncodings = [{ "quality", "filename", "name" }, ...]` (balanced-bracket JSON parse)
+- Fallback: `<video><source src="...">` and `encodings = [...];` assignment
+- Normalize `//cdn…` filenames to `https://`
+- Metadata: `og:title`, `og:image`, `og:video:duration`, `meta keywords`, Runtime span, Uploaded By regex
+
+Send `Cookie: age_verified=1` on fetch to bypass the age gate when possible.
+
+### Categories (`get_categories`)
+
+Popular, Newest, Top Week/Month/All, Trending, Random, HD, and sample tags in `categories.json`.
+
+### Registration checklist for YouJizz
+
+Besides creating `backend/app/scrapers/youjizz/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=youjizz`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `youjizz.com`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="youjizz"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### YouJizz verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://www.youjizz.com/videos/busty-redhead-filled-with-cum-77924611.html\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://www.youjizz.com/most-popular/1.html&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://www.youjizz.com/most-popular/1.html&page=2&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=youjizz"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://www.youjizz.com/videos/busty-redhead-filled-with-cum-77924611.html"
+```
+
 
