@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import shutil
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 from urllib.parse import urljoin, urlparse
 
 from app.config.settings import settings
@@ -76,14 +76,36 @@ _PRESET_FORMATS: list[DownloaderFormatItem] = [
     ),
 ]
 
+def get_preset_formats() -> list[DownloaderFormatItem]:
+    """Universal yt-dlp format selectors (prefixed by orchestrator)."""
+    return list(_PRESET_FORMATS)
+
+
+_YTDLP_NOT_INSTALLED = DownloaderApiError(
+    "yt-dlp is not installed on the server",
+    status_code=503,
+    error_code="YTDLP_NOT_INSTALLED",
+)
+
+
+def _import_yt_dlp() -> Any:
+    """Import yt-dlp once; optional dep may be missing in dev venv."""
+    try:
+        import yt_dlp  # pyright: ignore[reportMissingImports]
+    except ImportError as e:
+        raise _YTDLP_NOT_INSTALLED from e
+    return yt_dlp
+
 
 def get_yt_dlp_version() -> Optional[str]:
     try:
-        import yt_dlp
-
-        return getattr(yt_dlp, "version", None) or getattr(yt_dlp, "__version__", None)
-    except Exception:
+        yt_dlp = _import_yt_dlp()
+    except DownloaderApiError:
         return None
+    return cast(
+        Optional[str],
+        getattr(yt_dlp, "version", None) or getattr(yt_dlp, "__version__", None),
+    )
 
 
 def is_ffmpeg_available() -> bool:
@@ -275,14 +297,8 @@ def _resolve_playlist_to_video(ydl: Any, url: str, info: dict[str, Any]) -> dict
 
 
 def extract_info(url: str) -> dict[str, Any]:
-    try:
-        import yt_dlp
-    except ImportError as e:
-        raise DownloaderApiError(
-            "yt-dlp is not installed on the server",
-            status_code=503,
-            error_code="YTDLP_NOT_INSTALLED",
-        ) from e
+    yt_dlp = _import_yt_dlp()
+    playlist_count: Optional[int] = None
 
     try:
         opts = {**_base_ydl_opts(), "skip_download": True}
@@ -294,13 +310,10 @@ def extract_info(url: str) -> dict[str, Any]:
                     status_code=404,
                     error_code="NO_METADATA",
                 )
-            is_playlist = info.get("_type") in ("playlist", "multi_video")
-            playlist_count = None
-            if is_playlist:
+            if info.get("_type") in ("playlist", "multi_video"):
                 entries = info.get("entries") or []
                 playlist_count = len([e for e in entries if e is not None])
                 info = _resolve_playlist_to_video(ydl, url, info)
-                is_playlist = False
 
     except DownloaderApiError:
         raise
@@ -329,14 +342,7 @@ def extract_info(url: str) -> dict[str, Any]:
 
 
 def resolve_direct_url(url: str, format_id: str) -> dict[str, Any]:
-    try:
-        import yt_dlp
-    except ImportError as e:
-        raise DownloaderApiError(
-            "yt-dlp is not installed on the server",
-            status_code=503,
-            error_code="YTDLP_NOT_INSTALLED",
-        ) from e
+    yt_dlp = _import_yt_dlp()
 
     # yt-dlp format selectors (presets) always need server merge/download
     if format_id in {p.format_id for p in _PRESET_FORMATS} or "/" in format_id or "*" in format_id:
@@ -412,14 +418,7 @@ def download_with_format(
     progress_callback: Optional[Callable[[float], None]] = None,
     cancel_event: Optional[Any] = None,
 ) -> Path:
-    try:
-        import yt_dlp
-    except ImportError as e:
-        raise DownloaderApiError(
-            "yt-dlp is not installed on the server",
-            status_code=503,
-            error_code="YTDLP_NOT_INSTALLED",
-        ) from e
+    yt_dlp = _import_yt_dlp()
 
     merge_likely = (
         "+" in format_id

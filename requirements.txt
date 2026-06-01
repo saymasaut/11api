@@ -42,5 +42,7 @@ flower==2.0.1
 # Browser Impersonation (Anti-Bot Bypass)
 curl_cffi==0.7.3
 
-# Video downloader (1000+ sites; keep updated for new extractors)
+# Video / media downloaders
 yt-dlp>=2025.1.26
+gallery-dl>=1.27.0
+pytubefix>=8.0.0

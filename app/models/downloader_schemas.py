@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class DownloaderFormatItem(BaseModel):
     format_id: str
+    backend: Optional[str] = None
     ext: Optional[str] = None
     resolution: Optional[str] = None
     vcodec: Optional[str] = None
@@ -86,6 +87,7 @@ class DownloaderHealthResponse(BaseModel):
     temp_dir_writable: bool = False
     max_file_size_mb: int = 0
     message: Optional[str] = None
+    backends: dict[str, Optional[str]] = Field(default_factory=dict)
 
 
 class DownloaderErrorResponse(BaseModel):
