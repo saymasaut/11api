@@ -1,6 +1,5 @@
 [
   { "id": "home", "name": "Home", "url": "https://motherless.com/" },
-  { "id": "videos", "name": "Videos", "url": "https://motherless.com/videos" },
   { "id": "recent", "name": "Most Recent", "url": "https://motherless.com/videos/recent" },
   { "id": "favorited", "name": "Most Favorited", "url": "https://motherless.com/videos/favorited" },
   { "id": "viewed", "name": "Most Viewed", "url": "https://motherless.com/videos/viewed" },
