@@ -3,7 +3,6 @@ from __future__ import annotations
 import httpx
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Query
-from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -21,15 +20,10 @@ from app.config.settings import settings
 from app.core import cache, cache_cleanup, pool, rate_limit_middleware, rate_limit_cleanup
 
 # Exception handlers
-from app.exception_handlers import (
-    not_found_handler,
-    internal_error_handler,
-    general_exception_handler,
-    validation_exception_handler,
-)
+from app.exception_handlers import not_found_handler, internal_error_handler, general_exception_handler
 
 # API Routers
-from app.api.endpoints import hls, media, explore, thumbnails, one_xbet, ads, notifications, downloader
+from app.api.endpoints import hls, media, explore, thumbnails, one_xbet, ads, notifications
 # We will define new standardized routers here or import them if we moved them.
 # For this refactor, we will define them inline or in a new api module. 
 # To keep it clean, I will implement the Router structure within main.py for now, 
@@ -65,7 +59,6 @@ app = FastAPI(
 )
 
 # Register exception handlers
-app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(404, not_found_handler)
 app.add_exception_handler(500, internal_error_handler)
 app.add_exception_handler(StarletteHTTPException, general_exception_handler)
@@ -606,7 +599,6 @@ api_v1_router.include_router(media.router)
 api_v1_router.include_router(one_xbet.router)
 api_v1_router.include_router(ads.router)
 api_v1_router.include_router(notifications.router)
-api_v1_router.include_router(downloader.router, prefix="/downloader", tags=["Downloader"])
 
 
 # --- AppHub Version ---
