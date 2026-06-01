@@ -33,7 +33,6 @@ from app.services.downloader_exceptions import (
 )
 from app.services.downloader_job_store import job_store
 from app.services.downloader_security import validate_downloader_url
-from app.services.downloader import orchestrator as media_downloader
 from app.services import ytdlp_service
 
 logger = logging.getLogger(__name__)
@@ -54,17 +53,16 @@ async def _run_in_thread(fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
         raise classify_ytdlp_error(e).to_http_exception() from e
 
 
-def _ensure_downloader_ready() -> None:
-    health = media_downloader.get_health()
-    if health["status"] == "error":
+def _ensure_ytdlp_ready() -> None:
+    if ytdlp_service.get_yt_dlp_version() is None:
         raise HTTPException(
             status_code=503,
             detail=error_detail(
-                "DOWNLOADER_NOT_INSTALLED",
-                health.get("message") or "No downloader libraries installed",
+                "YTDLP_NOT_INSTALLED",
+                "yt-dlp is not installed on the server",
             ),
         )
-    if not health["temp_dir_writable"]:
+    if not ytdlp_service.check_temp_dir_writable():
         raise HTTPException(
             status_code=503,
             detail=error_detail(
@@ -92,7 +90,7 @@ async def _run_download_job(job_id: str) -> None:
 
     try:
         path = await asyncio.to_thread(
-            media_downloader.download_with_format,
+            ytdlp_service.download_with_format,
             job.url,
             job.format_id,
             work_dir,
@@ -155,15 +153,47 @@ async def _run_download_job(job_id: str) -> None:
     },
 )
 async def downloader_health() -> DownloaderHealthResponse:
-    h = media_downloader.get_health()
+    version = ytdlp_service.get_yt_dlp_version()
+    ffmpeg_ok = ytdlp_service.is_ffmpeg_available()
+    temp_ok = ytdlp_service.check_temp_dir_writable()
+
+    if version is None:
+        return DownloaderHealthResponse(
+            status="error",
+            yt_dlp_version=None,
+            ffmpeg_available=ffmpeg_ok,
+            temp_dir_writable=temp_ok,
+            max_file_size_mb=settings.DOWNLOADER_MAX_FILE_MB,
+            message="yt-dlp is not installed",
+        )
+
+    if not temp_ok:
+        return DownloaderHealthResponse(
+            status="degraded",
+            yt_dlp_version=version,
+            ffmpeg_available=ffmpeg_ok,
+            temp_dir_writable=False,
+            max_file_size_mb=settings.DOWNLOADER_MAX_FILE_MB,
+            message="Temp directory is not writable",
+        )
+
+    if not ffmpeg_ok:
+        return DownloaderHealthResponse(
+            status="degraded",
+            yt_dlp_version=version,
+            ffmpeg_available=False,
+            temp_dir_writable=temp_ok,
+            max_file_size_mb=settings.DOWNLOADER_MAX_FILE_MB,
+            message="ffmpeg not found — merge/HLS formats need server jobs with ffmpeg",
+        )
+
     return DownloaderHealthResponse(
-        status=h["status"],
-        yt_dlp_version=h.get("yt_dlp_version"),
-        ffmpeg_available=h.get("ffmpeg_available", False),
-        temp_dir_writable=h.get("temp_dir_writable", False),
+        status="ok",
+        yt_dlp_version=version,
+        ffmpeg_available=True,
+        temp_dir_writable=True,
         max_file_size_mb=settings.DOWNLOADER_MAX_FILE_MB,
-        message=h.get("message"),
-        backends=h.get("backends") or {},
+        message="Downloader ready",
     )
 
 
@@ -182,23 +212,26 @@ async def downloader_health() -> DownloaderHealthResponse:
 async def downloader_extract(
     url: str = Query(..., min_length=1, description="Video page URL"),
 ):
-    _ensure_downloader_ready()
+    _ensure_ytdlp_ready()
     safe_url = validate_downloader_url(url)
-    data = await _run_in_thread(media_downloader.extract_info, safe_url)
+    data = await _run_in_thread(ytdlp_service.extract_info, safe_url)
 
     formats = data.get("formats") or []
     format_items: list[DownloaderFormatItem] = []
-    from app.services.downloader.format_codec import split_format_id
-
     for f in formats:
         if isinstance(f, DownloaderFormatItem):
-            item = f
+            format_items.append(f)
         elif isinstance(f, dict):
-            item = DownloaderFormatItem(**f)
-        else:
-            continue
-        backend, _ = split_format_id(item.format_id)
-        format_items.append(item.model_copy(update={"backend": backend}))
+            format_items.append(DownloaderFormatItem(**f))
+
+    if not format_items:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "NO_FORMATS",
+                "No downloadable formats found for this URL",
+            ),
+        )
 
     return DownloaderExtractResponse(
         url=data["url"],
@@ -209,8 +242,6 @@ async def downloader_extract(
         uploader=data.get("uploader"),
         is_playlist=data.get("is_playlist", False),
         playlist_count=data.get("playlist_count"),
-        resolved_from_playlist=bool(data.get("playlist_count")),
-        extractor=data.get("extractor"),
         formats=format_items,
     )
 
@@ -229,13 +260,13 @@ async def downloader_resolve(
     url: str = Query(..., min_length=1),
     format_id: str = Query(..., alias="format_id", min_length=1),
 ):
-    _ensure_downloader_ready()
+    _ensure_ytdlp_ready()
     safe_url = validate_downloader_url(url)
     fid = format_id.strip()
     if not fid:
         raise http_exception_from_validation("format_id is required", "FORMAT_ID_REQUIRED")
 
-    data = await _run_in_thread(media_downloader.resolve_direct_url, safe_url, fid)
+    data = await _run_in_thread(ytdlp_service.resolve_direct_url, safe_url, fid)
     return DownloaderResolveResponse(**data)
 
 
@@ -248,7 +279,7 @@ async def downloader_resolve(
     },
 )
 async def downloader_create_job(body: DownloaderJobCreateRequest):
-    _ensure_downloader_ready()
+    _ensure_ytdlp_ready()
     safe_url = validate_downloader_url(body.url)
     format_id = body.format_id.strip()
     if not format_id:

@@ -46,10 +46,6 @@ htmlcov/
 *.bak
 temp/
 tmp/
-downloader_temp/
-
-# Local debug samples
-jable_sample.html
 
 # OS
 .DS_Store

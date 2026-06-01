@@ -1,20 +1,6 @@
 # Downloader module deployment
 
-The `/api/v1/downloader/*` endpoints use multiple backends:
-
-| Package | Role |
-|---------|------|
-| **yt-dlp** | 1000+ video sites (primary) |
-| **gallery-dl** | Image/gallery sites (DeviantArt, Pixiv, Instagram galleries, etc.) |
-| **pytubefix** | YouTube fallback when yt-dlp struggles |
-
-All require **ffmpeg** on the server for merged/HLS output.
-
-Sites are handled by yt-dlp extractors — not custom per-site scrapers. Keep `yt-dlp` updated:
-
-```bash
-pip install -U yt-dlp
-```
+The `/api/v1/downloader/*` endpoints use **yt-dlp** and **ffmpeg** on the server.
 
 ## Requirements
 
