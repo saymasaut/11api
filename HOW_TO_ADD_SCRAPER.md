@@ -3135,15 +3135,17 @@ curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
 - Videos hub: `https://motherless.com/videos`
 - Feeds: `/videos/recent`, `/videos/favorited`, `/videos/viewed`, `/videos/commented`
 - Categories/tags: `https://motherless.com/term/videos/{slug}` (e.g. `amateur`, `milf`)
-- Parse listing links: `href="/HEXCODE" title="..."` and thumb blocks (`.thumb-container`, `.media-item`)
+- Parse `div.thumb-container.video` blocks: `data-codename`, full `href="https://motherless.com/{ID}"`, title in `a.caption.title`, duration in `span.size`, views in `span.hits .value`, uploader in `a.uploader`
+- Fallbacks: loose `href=".../{ID}" title="..."` regex and `data-codename="ID"` attributes
 - Pagination: `?page=N` query parameter (page 1 omits `page`)
 
 ### Metadata and streams (`scrape`)
 
-- Canonical watch URL: `https://motherless.com/{HEX_ID}` (also `https://motherless.com/g/{group}/{HEX_ID}`)
-- **Primary streams:** inline player `setup({ file: '...' })` or `fileurl = '...'` in page HTML
-- **CDN fallback:** `https://cdn5-videos.motherlessmedia.com/videos/{ID}.mp4` and `{ID}-720p.mp4`
-- Metadata: `h1`, `og:title` / `og:image`, views/favorites line (`N Views • N Favorites`), `meta keywords`, `/term/videos/` tag links, uploader from `/m/{username}`
+- Canonical watch URL: `https://motherless.com/{HEX_ID}` (also `https://motherless.com/g/{group}/{HEX_ID}`, `/iframe/{ID}`)
+- **Primary streams (signed):** `__fileurl = '...'` and `<video><source src="..." res="720p">` from the watch page (URLs include `validfrom` / `hash` query params)
+- **Fallback:** unsigned `cdn{N}-videos.motherlessmedia.com/videos/{ID}.mp4` patterns only when HTML lacks sources
+- Metadata: `.media-meta-title h1`, `og:image`, `.media-meta-info span.count` for views, `/m/{user}` uploader, `/term/videos/` tags
+- Exclude gallery-only paths matching `G[VIGF]?[A-F0-9]+` (e.g. `/GV338999F`)
 
 Send `Cookie: age_verified=1` on fetch to bypass the age gate when possible.
 
