@@ -1,0 +1,3 @@
+# Railway / Nixpacks — ffmpeg required for merged downloads (HLS/DASH/YouTube)
+[phases.setup]
+nixPkgs = ["ffmpeg", "python313"]

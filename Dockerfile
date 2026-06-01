@@ -5,10 +5,11 @@ FROM python:3.13-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies (ffmpeg required for yt-dlp merge/HLS)
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
+    ffmpeg \
     libxml2-dev \
     libxslt-dev \
     && rm -rf /var/lib/apt/lists/*

@@ -29,6 +29,8 @@ class DownloaderExtractResponse(BaseModel):
     uploader: Optional[str] = None
     is_playlist: bool = False
     playlist_count: Optional[int] = None
+    resolved_from_playlist: bool = False
+    extractor: Optional[str] = None
     formats: list[DownloaderFormatItem] = Field(default_factory=list)
 
 

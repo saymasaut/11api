@@ -224,15 +224,6 @@ async def downloader_extract(
         elif isinstance(f, dict):
             format_items.append(DownloaderFormatItem(**f))
 
-    if not format_items:
-        raise HTTPException(
-            status_code=404,
-            detail=error_detail(
-                "NO_FORMATS",
-                "No downloadable formats found for this URL",
-            ),
-        )
-
     return DownloaderExtractResponse(
         url=data["url"],
         id=data.get("id"),
@@ -242,6 +233,8 @@ async def downloader_extract(
         uploader=data.get("uploader"),
         is_playlist=data.get("is_playlist", False),
         playlist_count=data.get("playlist_count"),
+        resolved_from_playlist=bool(data.get("playlist_count")),
+        extractor=data.get("extractor"),
         formats=format_items,
     )
 

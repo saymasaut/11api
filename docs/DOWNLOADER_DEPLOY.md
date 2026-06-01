@@ -1,6 +1,12 @@
 # Downloader module deployment
 
-The `/api/v1/downloader/*` endpoints use **yt-dlp** and **ffmpeg** on the server.
+The `/api/v1/downloader/*` endpoints use **yt-dlp** (1000+ supported sites) and **ffmpeg** on the server.
+
+Sites are handled by yt-dlp extractors — not custom per-site scrapers. Keep `yt-dlp` updated:
+
+```bash
+pip install -U yt-dlp
+```
 
 ## Requirements
 
