@@ -41,3 +41,6 @@ flower==2.0.1
 
 # Browser Impersonation (Anti-Bot Bypass)
 curl_cffi==0.7.3
+
+# Video downloader
+yt-dlp==2025.1.26

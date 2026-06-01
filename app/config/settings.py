@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     HLS_PROXY_ENABLED: bool = True
     HLS_PROXY_TIMEOUT: int = 30
 
+    # Downloader (yt-dlp)
+    DOWNLOADER_TEMP_DIR: str = "./downloader_temp"
+    DOWNLOADER_MAX_FILE_MB: int = 2048
+    DOWNLOADER_JOB_TIMEOUT_SEC: int = 3600
+    DOWNLOADER_FILE_TOKEN_TTL_SEC: int = 3600
+
     # Static/CDN
     STATIC_CDN_BASE_URL: str = ""
     STATIC_CACHE_MAX_AGE: int = 3600
