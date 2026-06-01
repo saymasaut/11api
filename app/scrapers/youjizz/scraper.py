@@ -44,6 +44,11 @@ _LIST_HREF_RE = re.compile(
     re.IGNORECASE,
 )
 _PAGE_NUM_PATH_RE = re.compile(r"^(.*/)(\d+)(\.html?)$", re.IGNORECASE)
+_PAGE_HYPHEN_NUM_RE = re.compile(r"^(.+-)(\d+)(\.html?)$", re.IGNORECASE)
+_URL_PATTERN_RE = re.compile(
+    r'id=["\']urlPattern["\']\s+value=["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
 
 
 def can_handle(host: str) -> bool:
@@ -350,7 +355,14 @@ def _parse_list_items(soup: BeautifulSoup, html: str, *, limit: int) -> list[dic
     return items[:limit]
 
 
-def _build_list_page_url(base_url: str, page: int) -> str:
+def _page_url_from_pattern(pattern: str, page_num: int) -> Optional[str]:
+    """Convert site urlPattern like /categories/milf-(:num).html to a path."""
+    if "(:num)" not in pattern:
+        return None
+    return "/" + pattern.replace("(:num)", str(page_num)).lstrip("/")
+
+
+def _build_list_page_url(base_url: str, page: int, *, html: str | None = None) -> str:
     raw = (base_url or "").strip() or BASE_SITE
     if not raw.startswith("http"):
         raw = urljoin(BASE_SITE, raw.lstrip("/"))
@@ -359,17 +371,45 @@ def _build_list_page_url(base_url: str, page: int) -> str:
     parsed = urlparse(raw)
     path = parsed.path or "/"
 
+    # Random is a single feed without numbered pages.
+    if path.rstrip("/") == "/random":
+        return urlunparse(
+            (parsed.scheme or "https", parsed.netloc or f"www.{SITE_HOST}", "/random", "", "", "")
+        )
+
+    if html and page_num > 1:
+        pm = _URL_PATTERN_RE.search(html)
+        if pm:
+            built = _page_url_from_pattern(pm.group(1), page_num)
+            if built:
+                return urlunparse(
+                    (
+                        parsed.scheme or "https",
+                        parsed.netloc or f"www.{SITE_HOST}",
+                        built,
+                        "",
+                        parsed.query,
+                        "",
+                    )
+                )
+
+    # /most-popular/2.html, /top-rated-week/2.html
     m = _PAGE_NUM_PATH_RE.match(path)
     if m:
         new_path = f"{m.group(1)}{page_num}{m.group(3)}"
-    elif path in ("", "/"):
-        new_path = f"/most-popular/{page_num}.html"
-    elif path.endswith(".html"):
-        base_path = re.sub(r"/\d+\.html$", "", path.rstrip("/"))
-        new_path = f"{base_path}/{page_num}.html"
     else:
-        base_path = path.rstrip("/")
-        new_path = f"{base_path}/{page_num}.html"
+        # /categories/milf-2.html, /search/teen-2.html
+        m_hy = _PAGE_HYPHEN_NUM_RE.match(path)
+        if m_hy:
+            new_path = f"{m_hy.group(1)}{page_num}{m_hy.group(3)}"
+        elif path in ("", "/"):
+            new_path = f"/most-popular/{page_num}.html"
+        elif path.endswith(".html"):
+            base_path = re.sub(r"/\d+\.html$", "", path.rstrip("/"))
+            new_path = f"{base_path}/{page_num}.html"
+        else:
+            base_path = path.rstrip("/")
+            new_path = f"{base_path}/{page_num}.html"
 
     return urlunparse(
         (
@@ -465,9 +505,20 @@ async def scrape(url: str) -> dict[str, Any]:
 
 
 async def list_videos(base_url: str, page: int = 1, limit: int = 100) -> list[dict[str, Any]]:
-    page_url = _build_list_page_url(base_url, page)
+    page_num = max(1, int(page) if page else 1)
+    first_url = _build_list_page_url(base_url, 1)
     try:
-        html = await fetch_page(page_url)
+        first_html = await fetch_page(first_url)
+    except Exception:
+        return []
+
+    page_url = (
+        first_url
+        if page_num <= 1
+        else _build_list_page_url(base_url, page_num, html=first_html)
+    )
+    try:
+        html = first_html if page_url == first_url else await fetch_page(page_url)
     except Exception:
         return []
     soup = BeautifulSoup(html, "lxml")

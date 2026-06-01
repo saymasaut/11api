@@ -3205,10 +3205,12 @@ curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://motherless.com/EE97
 
 - Popular: `https://www.youjizz.com/most-popular/1.html`
 - Newest: `https://www.youjizz.com/newest-clips/1.html`
-- Top: `/top-week/1.html`, `/top-month/1.html`, `/top/1.html`
-- Tags: `https://www.youjizz.com/tags/{slug}/1.html`
+- Top: `/top-rated/1.html`, `/top-rated-week/1.html`, `/top-rated-month/1.html` (not `/top-week/` or `/top/`)
+- HD: `/highdefinition/1.html` (not `/hd/`)
+- Tags: `/categories/{slug}-1.html` (not `/tags/{slug}/1.html`)
+- Random: `https://www.youjizz.com/random` (no numbered pages)
 - Parse `div.video-thumb[data-videoId]` → `.video-title a`, `span.time`, `.format-views`, `img[data-original]`
-- Pagination: replace page segment in path — e.g. `/most-popular/2.html` for page 2 (`#urlPattern` is `/most-popular/(:num).html`)
+- Pagination: `/most-popular/2.html` for feeds; `/categories/milf-2.html` for tags (read `#urlPattern` from page 1 HTML when needed)
 
 ### Metadata and streams (`scrape`)
 
