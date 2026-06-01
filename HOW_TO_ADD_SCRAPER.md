@@ -3119,4 +3119,75 @@ curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
   -d "{\"url\":\"https://www.eporner.com/embed/5avQdSA3oMK/\"}"
 ```
 
+## Motherless (motherless.com) Implementation Notes
+
+[Motherless](https://motherless.com/) is a user-upload host. Single videos use a hex media code at the site root (e.g. `https://motherless.com/EE97006`). Category and tag browsing uses `/term/videos/{slug}`; feeds live under `/videos`, `/videos/recent`, etc. MP4 streams are served from `*.motherlessmedia.com` (SD and `-720p` variants).
+
+### Host aliases
+
+- `motherless.com`
+- `www.motherless.com`
+- `*.motherlessmedia.com` (CDN, for direct MP4 proxying)
+
+### Listing and pagination (`list_videos`)
+
+- Home: `https://motherless.com/`
+- Videos hub: `https://motherless.com/videos`
+- Feeds: `/videos/recent`, `/videos/favorited`, `/videos/viewed`, `/videos/commented`
+- Categories/tags: `https://motherless.com/term/videos/{slug}` (e.g. `amateur`, `milf`)
+- Parse listing links: `href="/HEXCODE" title="..."` and thumb blocks (`.thumb-container`, `.media-item`)
+- Pagination: `?page=N` query parameter (page 1 omits `page`)
+
+### Metadata and streams (`scrape`)
+
+- Canonical watch URL: `https://motherless.com/{HEX_ID}` (also `https://motherless.com/g/{group}/{HEX_ID}`)
+- **Primary streams:** inline player `setup({ file: '...' })` or `fileurl = '...'` in page HTML
+- **CDN fallback:** `https://cdn5-videos.motherlessmedia.com/videos/{ID}.mp4` and `{ID}-720p.mp4`
+- Metadata: `h1`, `og:title` / `og:image`, views/favorites line (`N Views • N Favorites`), `meta keywords`, `/term/videos/` tag links, uploader from `/m/{username}`
+
+Send `Cookie: age_verified=1` on fetch to bypass the age gate when possible.
+
+### Categories (`get_categories`)
+
+Home, Videos, Recent, Favorited, Viewed, Commented, plus popular straight tags (Amateur, Homemade, Teen, MILF, Asian, etc.) in `categories.json`.
+
+### Registration checklist for Motherless
+
+Besides creating `backend/app/scrapers/motherless/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=motherless`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `motherless.com`, `motherlessmedia.com`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="motherless"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### Motherless verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://motherless.com/EE97006\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://motherless.com/videos/recent&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://motherless.com/term/videos/amateur&page=2&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=motherless"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://motherless.com/EE97006"
+```
+
 

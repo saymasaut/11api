@@ -112,6 +112,8 @@ class ScrapeRequest(BaseModel):
             "desithothub.com",
             "streamtape.com",
             "sendvid.com",
+            "motherless.com",
+            "motherlessmedia.com",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v
@@ -217,6 +219,8 @@ class ListRequest(BaseModel):
             "desithothub.com",
             "streamtape.com",
             "sendvid.com",
+            "motherless.com",
+            "motherlessmedia.com",
         ]
         if any(host.endswith(domain) for domain in allowed_domains):
             return v
