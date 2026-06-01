@@ -10,6 +10,7 @@ from typing import Any, Callable, Optional
 
 from app.config.settings import settings
 from app.models.downloader_schemas import DownloaderFormatItem
+from app.services.downloader_exceptions import DownloaderApiError, classify_ytdlp_error
 
 logger = logging.getLogger(__name__)
 
@@ -101,18 +102,32 @@ def _iter_usable_formats(info: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def extract_info(url: str) -> dict[str, Any]:
-    import yt_dlp
+    try:
+        import yt_dlp
+    except ImportError as e:
+        raise DownloaderApiError(
+            "yt-dlp is not installed on the server",
+            status_code=503,
+            error_code="YTDLP_NOT_INSTALLED",
+        ) from e
 
-    opts = {
-        **_base_ydl_opts(),
-        "skip_download": True,
-        "extract_flat": "in_playlist",
-    }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        opts = {
+            **_base_ydl_opts(),
+            "skip_download": True,
+            "extract_flat": "in_playlist",
+        }
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        raise classify_ytdlp_error(e) from e
 
     if not info:
-        raise RuntimeError("No information returned from yt-dlp")
+        raise DownloaderApiError(
+            "No information returned from yt-dlp",
+            status_code=404,
+            error_code="NO_METADATA",
+        )
 
     is_playlist = info.get("_type") == "playlist"
     entries = info.get("entries") or []
@@ -139,18 +154,32 @@ def extract_info(url: str) -> dict[str, Any]:
 
 
 def resolve_direct_url(url: str, format_id: str) -> dict[str, Any]:
-    import yt_dlp
+    try:
+        import yt_dlp
+    except ImportError as e:
+        raise DownloaderApiError(
+            "yt-dlp is not installed on the server",
+            status_code=503,
+            error_code="YTDLP_NOT_INSTALLED",
+        ) from e
 
-    opts = {
-        **_base_ydl_opts(),
-        "format": format_id,
-        "skip_download": True,
-    }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        opts = {
+            **_base_ydl_opts(),
+            "format": format_id,
+            "skip_download": True,
+        }
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        raise classify_ytdlp_error(e) from e
 
     if not info:
-        raise RuntimeError("Could not resolve format")
+        raise DownloaderApiError(
+            "Could not resolve format",
+            status_code=404,
+            error_code="FORMAT_NOT_FOUND",
+        )
 
     title = info.get("title") or info.get("fulltitle")
     ext = info.get("ext")
@@ -201,14 +230,32 @@ def download_with_format(
     Download and merge to output_dir. Returns path to final file.
   progress_callback receives 0.0–1.0.
     """
-    import yt_dlp
+    try:
+        import yt_dlp
+    except ImportError as e:
+        raise DownloaderApiError(
+            "yt-dlp is not installed on the server",
+            status_code=503,
+            error_code="YTDLP_NOT_INSTALLED",
+        ) from e
+
+    if not is_ffmpeg_available() and ("+" in format_id or "best" in format_id.lower()):
+        raise DownloaderApiError(
+            "ffmpeg is required for this format but is not available on the server",
+            status_code=503,
+            error_code="FFMPEG_REQUIRED",
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     outtmpl = str(output_dir / "%(title).200B [%(id)s].%(ext)s")
 
     def _hook(d: dict[str, Any]) -> None:
         if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
-            raise RuntimeError("Download canceled")
+            raise DownloaderApiError(
+                "Download canceled",
+                status_code=409,
+                error_code="CANCELED",
+            )
         if progress_callback and d.get("status") == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
             done = d.get("downloaded_bytes") or 0
@@ -226,31 +273,55 @@ def download_with_format(
     if not is_ffmpeg_available():
         opts.pop("merge_output_format", None)
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        if not info:
-            raise RuntimeError("Download failed")
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            if not info:
+                raise DownloaderApiError(
+                    "Download failed",
+                    status_code=502,
+                    error_code="DOWNLOAD_FAILED",
+                )
 
-        filepath = ydl.prepare_filename(info)
-        path = Path(filepath)
-        if path.exists():
-            if progress_callback:
-                progress_callback(1.0)
-            return path
-
-        # Merged file may differ extension
-        candidates = sorted(
-            output_dir.glob("*"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        for c in candidates:
-            if c.is_file() and c.suffix.lower() in (".mp4", ".mkv", ".webm", ".m4a", ".mp3"):
+            filepath = ydl.prepare_filename(info)
+            path = Path(filepath)
+            if path.exists():
                 if progress_callback:
                     progress_callback(1.0)
-                return c
+                return path
 
-    raise RuntimeError("Download finished but output file not found")
+            candidates = sorted(
+                output_dir.glob("*"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            for c in candidates:
+                if c.is_file() and c.suffix.lower() in (
+                    ".mp4",
+                    ".mkv",
+                    ".webm",
+                    ".m4a",
+                    ".mp3",
+                ):
+                    if progress_callback:
+                        progress_callback(1.0)
+                    return c
+
+        raise DownloaderApiError(
+            "Download finished but output file not found",
+            status_code=502,
+            error_code="OUTPUT_MISSING",
+        )
+    except DownloaderApiError:
+        raise
+    except Exception as e:
+        if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
+            raise DownloaderApiError(
+                "Download canceled",
+                status_code=409,
+                error_code="CANCELED",
+            ) from e
+        raise classify_ytdlp_error(e) from e
 
 
 def check_temp_dir_writable() -> bool:

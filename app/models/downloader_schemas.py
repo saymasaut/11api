@@ -2,7 +2,7 @@
 
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class DownloaderFormatItem(BaseModel):
@@ -43,8 +43,16 @@ class DownloaderResolveResponse(BaseModel):
 
 
 class DownloaderJobCreateRequest(BaseModel):
-    url: str
-    format_id: str
+    url: str = Field(..., min_length=1)
+    format_id: str = Field(..., min_length=1)
+
+    @field_validator("url", "format_id")
+    @classmethod
+    def strip_non_empty(cls, v: str) -> str:
+        text = (v or "").strip()
+        if not text:
+            raise ValueError("must not be empty")
+        return text
 
 
 class DownloaderJobCreateResponse(BaseModel):
@@ -75,3 +83,11 @@ class DownloaderHealthResponse(BaseModel):
     ffmpeg_available: bool = False
     temp_dir_writable: bool = False
     max_file_size_mb: int = 0
+    message: Optional[str] = None
+
+
+class DownloaderErrorResponse(BaseModel):
+    status: str = "error"
+    error_code: str
+    message: str
+    status_code: Optional[int] = None

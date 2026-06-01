@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 from fastapi import HTTPException
 
+from app.services.downloader_exceptions import error_detail
+
 
 _BLOCKED_HOSTS = frozenset(
     {
@@ -44,32 +46,53 @@ def validate_downloader_url(url: str) -> str:
     """
     text = (url or "").strip()
     if not text:
-        raise HTTPException(status_code=400, detail="URL is required")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("URL_REQUIRED", "URL is required"),
+        )
 
     parsed = urlparse(text)
     scheme = (parsed.scheme or "").lower()
     if scheme not in ("http", "https"):
         raise HTTPException(
             status_code=400,
-            detail="Only http and https URLs are supported",
+            detail=error_detail(
+                "INVALID_SCHEME",
+                "Only http and https URLs are supported",
+            ),
         )
 
     host = (parsed.hostname or "").lower().strip()
     if not host:
-        raise HTTPException(status_code=400, detail="Invalid URL host")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("INVALID_URL", "Invalid URL host"),
+        )
 
     if host in _BLOCKED_HOSTS or host.endswith(".localhost"):
-        raise HTTPException(status_code=422, detail="URL host is not allowed")
+        raise HTTPException(
+            status_code=422,
+            detail=error_detail("SSRF_BLOCKED", "URL host is not allowed"),
+        )
 
     if _is_private_ip(host):
-        raise HTTPException(status_code=422, detail="Private network URLs are not allowed")
+        raise HTTPException(
+            status_code=422,
+            detail=error_detail(
+                "SSRF_BLOCKED",
+                "Private network URLs are not allowed",
+            ),
+        )
 
     # Resolve DNS and block private IPs (SSRF)
     for ip in _resolve_host_ips(host):
         if _is_private_ip(ip):
             raise HTTPException(
                 status_code=422,
-                detail="URL resolves to a private network address",
+                detail=error_detail(
+                    "SSRF_BLOCKED",
+                    "URL resolves to a private network address",
+                ),
             )
 
     return text
