@@ -3266,4 +3266,75 @@ curl "http://127.0.0.1:8000/api/v1/categories?source=youjizz"
 curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://www.youjizz.com/videos/busty-redhead-filled-with-cum-77924611.html"
 ```
 
+## PornOne (pornone.com) Implementation Notes
+
+[PornOne](https://pornone.com/) (formerly vPorn) is a general tube site. Watch URLs use a numeric ID at the end of a three-segment path: `https://pornone.com/{category}/{slug}/{id}/` (e.g. `/foursome/french-teen-ang-granny-fucked-by-young-guys-in-good-foursome/280598663/`). Shorts use a different pattern (`/shorts/t/{id}/`) and are excluded from listing.
+
+### Host aliases
+
+- `pornone.com`
+- `www.pornone.com`
+- Stream/thumb CDNs: `s307.pornone.com`, `s308.pornone.com`, `th-eu*.pornone.com`, `cdn-eu-g*.pornone.com`
+
+### Listing and pagination (`list_videos`)
+
+- Home: `https://pornone.com/` (page 2+ → `/2/`, `/3/`, …)
+- Newest: `https://pornone.com/newest/` (page 2+ → `/newest/2/`)
+- Tags/categories at site root: `/milf/`, `/hd/`, `/teen/` (not `/category/milf/` — that 404s)
+- Avoid `/popular/` (404 on this host)
+- Parse `<a href="/{cat}/{slug}/{id}/">` links; skip locale-prefixed duplicates (`/de/`, `/fr/`, …) and `/shorts/`
+- Optional enrichment from inline `related_videos = [{thumb, url, title, duration}, …]` JSON on watch pages
+
+Send `Cookie: age_verified=1; cookies_accepted=1` and `Referer: https://pornone.com/` on fetch.
+
+### Metadata and streams (`scrape`)
+
+- **Primary streams:** `<video id="pornone-video-player"><source src="..." label="720p" res="720">`
+- **Fallback:** JSON-LD `contentUrl`, regex for `*.pornone.com/*.mp4`
+- Canonical URL from `<link rel="canonical">` or `og:url`
+- Metadata: `og:title`, `og:image`, `og:video:duration`, `meta keywords`
+
+### Categories (`get_categories`)
+
+Home, Newest, HD, and sample tag slugs in `categories.json` (all verified to return 200 with video links).
+
+### Registration checklist for PornOne
+
+Besides creating `backend/app/scrapers/pornone/`, update all of these:
+
+- `backend/app/scrapers/__init__.py`
+- `backend/app/main.py`
+  - import list
+  - `_scrape_dispatch`
+  - `_list_dispatch`
+  - `/api/v1/categories` source mapping (`source=pornone`)
+- `backend/app/services/video_streaming.py`
+  - scraper selection branch
+  - supported-host help text
+  - stream quality map host checks for `pornone.com`
+- `backend/app/api/endpoints/explore.py`
+  - add `ExploreSourceResponse` entry (`sourceId="pornone"`)
+
+If request URL validation still uses explicit host allowlists in your branch, also update:
+
+- `backend/app/models/schemas.py`
+  - scrape URL allowlist
+  - list/base URL allowlist
+
+### PornOne verification examples
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/scrapes \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://pornone.com/foursome/french-teen-ang-granny-fucked-by-young-guys-in-good-foursome/280598663/\"}"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://pornone.com/&page=1&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/videos?base_url=https://pornone.com/newest/&page=2&limit=20"
+
+curl "http://127.0.0.1:8000/api/v1/categories?source=pornone"
+
+curl "http://127.0.0.1:8000/api/v1/videos/stream?url=https://pornone.com/foursome/french-teen-ang-granny-fucked-by-young-guys-in-good-foursome/280598663/"
+```
+
 
