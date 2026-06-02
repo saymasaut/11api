@@ -42,6 +42,5 @@ flower==2.0.1
 # Browser Impersonation (Anti-Bot Bypass)
 curl_cffi==0.7.3
 
-# Universal video/image metadata / download link extraction
+# Universal video metadata / download link extraction
 yt-dlp==2025.12.8
-gallery-dl==1.32.1
