@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import ipaddress
 import logging
 import os
 import re
 import socket
-from typing import Any, Optional
+from types import ModuleType
+from typing import Any, Optional, Type
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
@@ -14,6 +16,29 @@ from fastapi import HTTPException
 from app.models.downloader_schemas import ExtractResponse, FormatItem, MetadataBlock
 
 logger = logging.getLogger(__name__)
+
+_ytdlp_module: ModuleType | None = None
+_ytdlp_download_error: Type[BaseException] | None = None
+_ytdlp_extractor_error: Type[BaseException] | None = None
+
+
+def _ensure_ytdlp() -> ModuleType:
+    """Load yt-dlp once; raise 503 if the package is missing on the server."""
+    global _ytdlp_module, _ytdlp_download_error, _ytdlp_extractor_error
+    if _ytdlp_module is not None:
+        return _ytdlp_module
+    try:
+        _ytdlp_module = importlib.import_module("yt_dlp")
+        utils = importlib.import_module("yt_dlp.utils")
+        _ytdlp_download_error = utils.DownloadError
+        _ytdlp_extractor_error = utils.ExtractorError
+    except ImportError as e:
+        logger.error("yt-dlp not installed: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="ytdlp_not_installed",
+        ) from e
+    return _ytdlp_module
 
 _PLATFORM_LABELS: dict[str, str] = {
     "youtube": "YouTube",
@@ -272,6 +297,17 @@ def _map_info_to_response(info: dict[str, Any], original_url: str) -> ExtractRes
     safe = re.sub(r'[/\\:*?"<>|]+', "_", str(filename_hint)).strip()
     filename_hint = safe[:120] if safe else "video"
 
+    # YouTube CDN (googlevideo) requires Referer / UA matching the watch page.
+    extractor_lower = str(extractor_key or "").lower()
+    if "youtube" in extractor_lower:
+        headers.setdefault("Referer", "https://www.youtube.com/")
+        headers.setdefault("Origin", "https://www.youtube.com")
+        headers.setdefault(
+            "User-Agent",
+            "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+        )
+
     return ExtractResponse(
         status="success",
         metadata=metadata,
@@ -283,12 +319,9 @@ def _map_info_to_response(info: dict[str, Any], original_url: str) -> ExtractRes
 
 
 def _extract_sync(url: str) -> ExtractResponse:
-    try:
-        import yt_dlp
-        from yt_dlp.utils import DownloadError, ExtractorError
-    except ImportError as e:
-        logger.error("yt-dlp not installed: %s", e)
-        raise HTTPException(status_code=503, detail="merge_unavailable") from e
+    ytdlp = _ensure_ytdlp()
+    download_error = _ytdlp_download_error or Exception
+    extractor_error = _ytdlp_extractor_error or Exception
 
     opts: dict[str, Any] = {
         "quiet": True,
@@ -304,9 +337,9 @@ def _extract_sync(url: str) -> ExtractResponse:
         opts["cookiefile"] = cookies_file
 
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
+        with ytdlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
-    except ExtractorError as e:
+    except extractor_error as e:
         msg = str(e).lower()
         if "private" in msg or "login" in msg or "sign in" in msg:
             raise HTTPException(status_code=403, detail="private_content") from e
@@ -315,7 +348,7 @@ def _extract_sync(url: str) -> ExtractResponse:
         if "429" in msg or "rate" in msg:
             raise HTTPException(status_code=429, detail="rate_limited") from e
         raise HTTPException(status_code=400, detail="unsupported_url") from e
-    except DownloadError as e:
+    except download_error as e:
         msg = str(e).lower()
         if "429" in msg or "rate" in msg:
             raise HTTPException(status_code=429, detail="rate_limited") from e
