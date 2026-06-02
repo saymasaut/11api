@@ -18,6 +18,7 @@ class FormatItem(BaseModel):
     video_url: Optional[str] = None
     audio_url: Optional[str] = None
     is_default: bool = False
+    downloadable: bool = True
 
 
 class MetadataBlock(BaseModel):
