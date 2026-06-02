@@ -23,7 +23,7 @@ from app.core import cache, cache_cleanup, pool, rate_limit_middleware, rate_lim
 from app.exception_handlers import not_found_handler, internal_error_handler, general_exception_handler
 
 # API Routers
-from app.api.endpoints import hls, media, explore, thumbnails, one_xbet, ads, notifications
+from app.api.endpoints import hls, media, explore, thumbnails, one_xbet, ads, notifications, downloader
 # We will define new standardized routers here or import them if we moved them.
 # For this refactor, we will define them inline or in a new api module. 
 # To keep it clean, I will implement the Router structure within main.py for now, 
@@ -599,6 +599,7 @@ api_v1_router.include_router(media.router)
 api_v1_router.include_router(one_xbet.router)
 api_v1_router.include_router(ads.router)
 api_v1_router.include_router(notifications.router)
+api_v1_router.include_router(downloader.router, prefix="/downloader", tags=["Downloader"])
 
 
 # --- AppHub Version ---
