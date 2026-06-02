@@ -11,7 +11,7 @@ router = APIRouter()
 @router.get("/extract", response_model=ExtractResponse)
 async def extract_endpoint(url: str = Query(..., description="Video page URL")):
     """
-    Extract metadata and downloadable formats for any yt-dlp-supported URL.
+    Extract metadata and downloadable formats (yt-dlp, with gallery-dl fallback).
     """
     if not url or not url.strip():
         raise HTTPException(status_code=400, detail="unsupported_url")

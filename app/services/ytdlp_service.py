@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import socket
+from io import StringIO
 from types import ModuleType
 from typing import Any, Optional, Type
 from urllib.parse import urlparse
@@ -20,6 +21,8 @@ logger = logging.getLogger(__name__)
 _ytdlp_module: ModuleType | None = None
 _ytdlp_download_error: Type[BaseException] | None = None
 _ytdlp_extractor_error: Type[BaseException] | None = None
+_gallery_dl_module: ModuleType | None = None
+_gallery_dl_checked = False
 
 
 def _ensure_ytdlp() -> ModuleType:
@@ -40,6 +43,29 @@ def _ensure_ytdlp() -> ModuleType:
         ) from e
     return _ytdlp_module
 
+
+def _ensure_gallery_dl() -> ModuleType | None:
+    """Load gallery-dl once for fallback extraction (galleries, some social posts)."""
+    global _gallery_dl_module, _gallery_dl_checked
+    if _gallery_dl_checked:
+        return _gallery_dl_module
+    _gallery_dl_checked = True
+    try:
+        _gallery_dl_module = importlib.import_module("gallery_dl")
+    except ImportError as e:
+        logger.warning("gallery-dl not installed: %s", e)
+        _gallery_dl_module = None
+    return _gallery_dl_module
+
+
+def _apply_gallery_cookies(config_mod: ModuleType) -> None:
+    cookies_file = os.environ.get("GALLERY_DL_COOKIES_FILE", "").strip()
+    if not cookies_file:
+        cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "").strip()
+    if cookies_file and os.path.isfile(cookies_file):
+        config_mod.set(("extractor",), "cookies", cookies_file)
+
+
 _PLATFORM_LABELS: dict[str, str] = {
     "youtube": "YouTube",
     "tiktok": "TikTok",
@@ -50,7 +76,13 @@ _PLATFORM_LABELS: dict[str, str] = {
     "vimeo": "Vimeo",
     "dailymotion": "Dailymotion",
     "twitch": "Twitch",
+    "pixiv": "Pixiv",
+    "tumblr": "Tumblr",
+    "deviantart": "DeviantArt",
+    "pinterest": "Pinterest",
 }
+
+_VIDEO_EXTENSIONS = frozenset({"mp4", "webm", "mkv", "mov", "m4v", "gifv"})
 
 
 def _validate_url(url: str) -> str:
@@ -318,7 +350,198 @@ def _map_info_to_response(info: dict[str, Any], original_url: str) -> ExtractRes
     )
 
 
-def _extract_sync(url: str) -> ExtractResponse:
+def _ext_from_url(url: str) -> Optional[str]:
+    path = urlparse(url).path
+    name = path.rsplit("/", 1)[-1]
+    if "." in name:
+        return name.rsplit(".", 1)[-1].lower()
+    return None
+
+
+def _gallery_format_label(kw: dict[str, Any], ext: Optional[str], index: int) -> str:
+    parts: list[str] = []
+    num = kw.get("num")
+    count = kw.get("count")
+    if num and count:
+        parts.append(f"{num}/{count}")
+    height = kw.get("height")
+    if height:
+        parts.append(f"{height}p")
+    if ext:
+        parts.append(str(ext).upper())
+    return " · ".join(parts) if parts else f"Item {index + 1}"
+
+
+def _pick_gallery_default_format(formats: list[FormatItem]) -> Optional[str]:
+    if not formats:
+        return None
+    for f in formats:
+        if (f.ext or "").lower() in _VIDEO_EXTENSIONS:
+            return f.format_id
+    best_id: Optional[str] = None
+    best_height = -1
+    for f in formats:
+        if f.resolution and f.resolution.endswith("p"):
+            try:
+                h = int(f.resolution[:-1])
+            except ValueError:
+                continue
+            if h > best_height:
+                best_height = h
+                best_id = f.format_id
+    return best_id or formats[0].format_id
+
+
+def _map_gallery_exception(exc: BaseException) -> HTTPException:
+    name = exc.__class__.__name__
+    msg = str(exc).lower()
+    if name in (
+        "AuthRequired",
+        "AuthenticationError",
+        "AuthorizationError",
+        "ChallengeError",
+    ):
+        return HTTPException(status_code=403, detail="private_content")
+    if name == "NotFoundError" or "404" in msg:
+        return HTTPException(status_code=400, detail="unsupported_url")
+    if "429" in msg or "rate" in msg:
+        return HTTPException(status_code=429, detail="rate_limited")
+    if name == "NoExtractorError":
+        return HTTPException(status_code=400, detail="unsupported_url")
+    return HTTPException(status_code=400, detail="unsupported_url")
+
+
+def _map_gallery_to_response(data_job: Any, original_url: str) -> ExtractResponse:
+    urls: list[str] = list(data_job.data_urls or [])
+    metas: list[dict[str, Any]] = list(data_job.data_meta or [])
+    post_meta: dict[str, Any] = {}
+    for entry in data_job.data_post or []:
+        if isinstance(entry, dict):
+            post_meta.update(entry)
+
+    extractor = getattr(data_job, "extractor", None)
+    category = getattr(extractor, "category", None) or "gallery-dl"
+    subcategory = getattr(extractor, "subcategory", None)
+    extractor_key = f"{category}:{subcategory}" if subcategory else str(category)
+
+    formats: list[FormatItem] = []
+    thumbs: list[str] = []
+
+    for i, media_url in enumerate(urls):
+        kw = metas[i] if i < len(metas) else {}
+        ext = kw.get("extension") or _ext_from_url(media_url)
+        height = kw.get("height")
+        resolution = f"{height}p" if height else None
+        formats.append(
+            FormatItem(
+                format_id=str(i),
+                label=_gallery_format_label(kw, ext, i),
+                ext=ext,
+                resolution=resolution,
+                filesize=kw.get("filesize") or kw.get("size"),
+                mode="single",
+                url=media_url,
+            )
+        )
+        if ext and ext.lower() not in _VIDEO_EXTENSIONS:
+            thumbs.append(media_url)
+
+    first_kw = metas[0] if metas else {}
+    title = (
+        post_meta.get("title")
+        or first_kw.get("title")
+        or post_meta.get("description")
+        or first_kw.get("description")
+        or first_kw.get("filename")
+    )
+    uploader = (
+        post_meta.get("author")
+        or post_meta.get("username")
+        or first_kw.get("author")
+        or first_kw.get("username")
+        or first_kw.get("user")
+    )
+    thumb = post_meta.get("thumbnail") or first_kw.get("thumbnail")
+    if not thumb and thumbs:
+        thumb = thumbs[0]
+
+    tags_raw = post_meta.get("tags") or first_kw.get("tags") or []
+    tags = [str(t) for t in tags_raw] if isinstance(tags_raw, list) else []
+
+    metadata = MetadataBlock(
+        title=str(title) if title else None,
+        full_title=str(title) if title else None,
+        thumbnail=str(thumb) if thumb else None,
+        thumbnails=thumbs[:12] if thumbs else ([str(thumb)] if thumb else []),
+        description=_short_description(
+            post_meta.get("description") or first_kw.get("description")
+        ),
+        uploader=str(uploader) if uploader else None,
+        channel=str(uploader) if uploader else None,
+        webpage_url=original_url,
+        original_url=original_url,
+        extractor=str(category),
+        extractor_key=extractor_key,
+        platform=_platform_label(str(category)),
+        tags=tags,
+        keywords=tags,
+    )
+
+    default_id = _pick_gallery_default_format(formats)
+    if default_id:
+        for f in formats:
+            f.is_default = f.format_id == default_id
+
+    headers: dict[str, str] = {}
+    extractor_lower = str(category).lower()
+    if "instagram" in extractor_lower:
+        headers.setdefault("Referer", "https://www.instagram.com/")
+        headers.setdefault("Origin", "https://www.instagram.com")
+    elif "twitter" in extractor_lower or category == "twitter":
+        headers.setdefault("Referer", "https://twitter.com/")
+        headers.setdefault("Origin", "https://twitter.com")
+
+    filename_hint = metadata.title or "media"
+    safe = re.sub(r'[/\\:*?"<>|]+', "_", str(filename_hint)).strip()
+    filename_hint = safe[:120] if safe else "media"
+
+    return ExtractResponse(
+        status="success",
+        metadata=metadata,
+        formats=formats,
+        default_format_id=default_id,
+        http_headers=headers,
+        filename_hint=filename_hint,
+    )
+
+
+def _extract_gallery_dl(url: str) -> ExtractResponse:
+    if _ensure_gallery_dl() is None:
+        raise HTTPException(status_code=503, detail="gallery_dl_not_installed")
+
+    config_mod = importlib.import_module("gallery_dl.config")
+    job_mod = importlib.import_module("gallery_dl.job")
+
+    config_mod.load()
+    _apply_gallery_cookies(config_mod)
+
+    data_job = job_mod.DataJob(url, file=StringIO())
+    try:
+        data_job.run()
+    except Exception as e:
+        logger.exception("gallery-dl extract failed for %s", url)
+        raise _map_gallery_exception(e) from e
+
+    if data_job.exception:
+        raise _map_gallery_exception(data_job.exception)
+
+    if not data_job.data_urls:
+        raise HTTPException(status_code=400, detail="unsupported_url")
+
+    return _map_gallery_to_response(data_job, url)
+
+
+def _extract_ytdlp(url: str) -> ExtractResponse:
     ytdlp = _ensure_ytdlp()
     download_error = _ytdlp_download_error or Exception
     extractor_error = _ytdlp_extractor_error or Exception
@@ -368,6 +591,38 @@ def _extract_sync(url: str) -> ExtractResponse:
         info = first
 
     return _map_info_to_response(info, url)
+
+
+def _extract_sync(url: str) -> ExtractResponse:
+    """Try yt-dlp first, then gallery-dl when yt-dlp fails or returns no formats."""
+    ytdlp_error: HTTPException | None = None
+    ytdlp_result: ExtractResponse | None = None
+
+    try:
+        ytdlp_result = _extract_ytdlp(url)
+        if ytdlp_result.formats:
+            return ytdlp_result
+        logger.info("yt-dlp returned no formats for %s, trying gallery-dl", url)
+    except HTTPException as e:
+        ytdlp_error = e
+        logger.info("yt-dlp failed for %s (%s), trying gallery-dl", url, e.detail)
+
+    try:
+        gallery_result = _extract_gallery_dl(url)
+        if gallery_result.formats:
+            return gallery_result
+    except HTTPException as gallery_error:
+        if gallery_error.detail == "gallery_dl_not_installed" and ytdlp_error:
+            raise ytdlp_error from gallery_error
+        if ytdlp_error:
+            raise ytdlp_error from gallery_error
+        raise gallery_error
+
+    if ytdlp_result and ytdlp_result.formats:
+        return ytdlp_result
+    if ytdlp_error:
+        raise ytdlp_error
+    raise HTTPException(status_code=400, detail="unsupported_url")
 
 
 async def extract_video(url: str) -> ExtractResponse:
