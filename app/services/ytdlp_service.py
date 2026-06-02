@@ -116,66 +116,15 @@ def _format_label(fmt: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
-def _is_direct_file_url(url: Optional[str], protocol: Optional[str] = None) -> bool:
-    """True for progressive https URLs the app can download (not HLS manifests)."""
-    if not url:
-        return False
-    lower = url.lower()
-    if ".m3u8" in lower or "playlist" in lower:
-        return False
-    proto = (protocol or "").lower()
-    if proto and ("m3u8" in proto or "dash" in proto):
-        return False
-    return lower.startswith("http://") or lower.startswith("https://")
-
-
-def _height_from_format(fmt: dict[str, Any]) -> int:
-    h = fmt.get("height")
-    if isinstance(h, (int, float)):
-        return int(h)
-    return 0
-
-
-def _height_from_item(f: FormatItem) -> int:
-    if f.resolution and f.resolution.endswith("p"):
-        try:
-            return int(f.resolution[:-1])
-        except ValueError:
-            pass
-    return 0
-
-
 def _pick_default_format(formats: list[FormatItem]) -> Optional[str]:
     if not formats:
         return None
-
-    def height_key(f: FormatItem) -> int:
-        if f.resolution and f.resolution.endswith("p"):
-            try:
-                return int(f.resolution[:-1])
-            except ValueError:
-                pass
-        return 0
-
-    # Best progressive combined stream (works on phone without server IP lock).
-    progressive_mp4 = [
-        f
-        for f in formats
-        if f.downloadable
-        and f.mode == "single"
-        and f.url
-        and (f.ext or "").lower() == "mp4"
-        and f.vcodec
-        and f.acodec
-    ]
-    if progressive_mp4:
-        progressive_mp4.sort(key=height_key, reverse=True)
-        return progressive_mp4[0].format_id
-
     for f in formats:
-        if f.downloadable and f.mode == "single" and f.url:
+        if f.is_default:
             return f.format_id
-
+    for f in formats:
+        if f.mode == "single" and f.ext in ("mp4", "mkv", "webm"):
+            return f.format_id
     return formats[0].format_id
 
 
@@ -195,7 +144,6 @@ def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
             continue
 
         url = fmt.get("url")
-        protocol = fmt.get("protocol")
         vcodec = fmt.get("vcodec")
         acodec = fmt.get("acodec")
         has_video = vcodec and vcodec != "none"
@@ -208,18 +156,14 @@ def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
         video_url: Optional[str] = None
         audio_url: Optional[str] = None
         single_url: Optional[str] = url
-        downloadable = True
 
         if has_video and has_audio and url:
+            mode = "single"
+        elif has_video and url:
             mode = "single"
         elif has_audio and not has_video and url:
             mode = "audio_only"
         else:
-            # Video-only DASH/CDN URLs fail on mobile (IP-locked googlevideo).
-            continue
-
-        proto_str = str(protocol) if protocol else None
-        if not _is_direct_file_url(url, proto_str):
             continue
 
         seen.add(fid)
@@ -238,7 +182,6 @@ def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
                 url=single_url,
                 video_url=video_url,
                 audio_url=audio_url,
-                downloadable=downloadable,
             )
         )
 
@@ -263,12 +206,9 @@ def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
         pair_id = f"{best_video.get('format_id')}+{best_audio.get('format_id')}"
         if pair_id not in seen:
             vh = best_video.get("height")
-            label = (
-                f"{vh}p · merge (server only)"
-                if vh
-                else "Best quality · merge (server only)"
-            )
-            items.append(
+            label = f"{vh}p · MP4 (merge)" if vh else "Best quality (merge)"
+            items.insert(
+                0,
                 FormatItem(
                     format_id=pair_id,
                     label=label,
@@ -280,20 +220,19 @@ def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
                     mode="separate",
                     video_url=best_video.get("url"),
                     audio_url=best_audio.get("url"),
-                    downloadable=False,
+                    is_default=True,
                 ),
             )
             seen.add(pair_id)
 
-    default_id = _pick_default_format(items)
-    for f in items:
-        f.is_default = f.format_id == default_id
-
-    def sort_key(f: FormatItem) -> tuple[int, int]:
-        tier = 0 if f.downloadable and f.mode != "audio_only" else (1 if f.downloadable else 2)
-        return (tier, -_height_from_item(f))
-
-    items.sort(key=sort_key)
+    if items and not any(f.is_default for f in items):
+        # Prefer single-file MP4
+        for f in items:
+            if f.mode == "single" and (f.ext or "").lower() == "mp4":
+                f.is_default = True
+                break
+        if not any(f.is_default for f in items):
+            items[0].is_default = True
 
     return items
 
