@@ -165,23 +165,93 @@ def _detect_container_ext(fmt: dict[str, Any]) -> str:
     return "mp4"
 
 
-def _format_label(fmt: dict[str, Any]) -> str:
-    parts: list[str] = []
+def _resolution_label(fmt: dict[str, Any]) -> Optional[str]:
     height = fmt.get("height")
     if height:
-        parts.append(f"{height}p")
-    container = _detect_container_ext(fmt)
-    parts.append(_container_display_name(container))
-    note = fmt.get("format_note")
-    if note:
-        note_s = str(note).strip()
-        upper_container = _container_display_name(container)
-        if note_s and note_s.upper() != upper_container and note_s not in parts:
-            parts.append(note_s)
-    if not parts:
-        fid = fmt.get("format_id")
-        return str(fid) if fid else "Unknown"
+        return f"{int(height)}p"
+    width = fmt.get("width")
+    if width:
+        w = int(width)
+        if w >= 3840:
+            return "2160p"
+        if w >= 2560:
+            return "1440p"
+        if w >= 1920:
+            return "1080p"
+        if w >= 1280:
+            return "720p"
+        if w >= 854:
+            return "480p"
+        if w >= 640:
+            return "360p"
+        return f"{w}w"
+    return None
+
+
+def _bitrate_kbps(fmt: dict[str, Any]) -> Optional[int]:
+    for key in ("abr", "tbr", "vbr"):
+        val = fmt.get(key)
+        if val is not None:
+            try:
+                return int(round(float(val)))
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _audio_codec_label(acodec: Optional[str]) -> Optional[str]:
+    if not acodec or acodec == "none":
+        return None
+    lower = acodec.lower()
+    if lower.startswith("mp4a") or lower in ("aac", "m4a"):
+        return "AAC"
+    if "opus" in lower:
+        return "Opus"
+    if "mp3" in lower or lower == "mp3":
+        return "MP3"
+    if "vorbis" in lower:
+        return "Vorbis"
+    if "flac" in lower:
+        return "FLAC"
+    return None
+
+
+def _video_quality_label(fmt: dict[str, Any]) -> str:
+    parts: list[str] = []
+    res = _resolution_label(fmt)
+    if res:
+        parts.append(res)
+
+    container = _container_display_name(_detect_container_ext(fmt))
+    parts.append(container)
+
+    fps = fmt.get("fps")
+    if fps and float(fps) >= 50:
+        parts.append(f"{int(round(float(fps)))}fps")
+
     return " · ".join(parts)
+
+
+def _audio_quality_label(fmt: dict[str, Any]) -> str:
+    parts: list[str] = []
+    bitrate = _bitrate_kbps(fmt)
+    if bitrate:
+        parts.append(f"{bitrate} kbps")
+
+    codec = _audio_codec_label(fmt.get("acodec"))
+    if codec:
+        parts.append(codec)
+    else:
+        parts.append(_container_display_name(_detect_container_ext(fmt)))
+
+    return " · ".join(parts) if parts else "Audio"
+
+
+def _merge_quality_label(best_video: dict[str, Any]) -> str:
+    res = _resolution_label(best_video)
+    if res:
+        return f"{res} · MP4 (merge)"
+    return "Best · MP4 (merge)"
 
 
 def _pick_default_format(formats: list[FormatItem]) -> Optional[str]:
@@ -210,6 +280,14 @@ def _normalize_downloader_url(url: str) -> str:
     return url.strip()
 
 
+def _is_storyboard_format(fmt: dict[str, Any], fid: str) -> bool:
+    fid_l = fid.lower()
+    if fid_l.startswith("sb") or "storyboard" in fid_l:
+        return True
+    note = str(fmt.get("format_note") or "").lower()
+    return "storyboard" in note or ("preview" in note and not fmt.get("height"))
+
+
 def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
     raw_formats = info.get("formats") or []
     items: list[FormatItem] = []
@@ -223,6 +301,8 @@ def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
             continue
         fid = str(fmt_id)
         if fid in seen:
+            continue
+        if _is_storyboard_format(fmt, fid):
             continue
 
         url = fmt.get("url")
@@ -260,14 +340,19 @@ def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
 
         container = _detect_container_ext(fmt)
         seen.add(fid)
+        if mode == "audio_only":
+            label = _audio_quality_label(fmt)
+            resolution = None
+        else:
+            label = _video_quality_label(fmt)
+            resolution = _resolution_label(fmt)
+
         items.append(
             FormatItem(
                 format_id=fid,
-                label=_format_label(fmt),
+                label=label,
                 ext=container,
-                resolution=(
-                    f"{fmt.get('height')}p" if fmt.get("height") else None
-                ),
+                resolution=resolution,
                 filesize=fmt.get("filesize") or fmt.get("filesize_approx"),
                 vcodec=vcodec if vcodec != "none" else None,
                 acodec=acodec if acodec != "none" else None,
@@ -299,33 +384,15 @@ def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
         pair_id = f"{best_video.get('format_id')}+{best_audio.get('format_id')}"
         if pair_id not in seen:
             vh = best_video.get("height")
-            v_container = _detect_container_ext(best_video)
-            a_container = _detect_container_ext(best_audio)
-            # Merged output is MP4 unless both streams are already progressive files.
             merge_out = "mp4"
-            if v_container == "m3u8" or a_container == "m3u8":
-                merge_label = (
-                    f"{_container_display_name(v_container)}+"
-                    f"{_container_display_name(a_container)} (merge → MP4)"
-                )
-            elif v_container == a_container:
-                merge_label = f"{_container_display_name(v_container)} (merge)"
-            else:
-                merge_label = (
-                    f"{_container_display_name(v_container)}+"
-                    f"{_container_display_name(a_container)} (merge)"
-                )
-            if vh:
-                label = f"{vh}p · {merge_label}"
-            else:
-                label = merge_label
+            label = _merge_quality_label(best_video)
             items.insert(
                 0,
                 FormatItem(
                     format_id=pair_id,
                     label=label,
                     ext=merge_out,
-                    resolution=f"{vh}p" if vh else None,
+                    resolution=_resolution_label(best_video),
                     filesize=None,
                     vcodec=best_video.get("vcodec"),
                     acodec=best_audio.get("acodec"),
