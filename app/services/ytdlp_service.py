@@ -128,6 +128,17 @@ def _pick_default_format(formats: list[FormatItem]) -> Optional[str]:
     return formats[0].format_id
 
 
+def _normalize_downloader_url(url: str) -> str:
+    """x.com and twitter.com are equivalent for yt-dlp."""
+    parsed = urlparse(url.strip())
+    host = (parsed.hostname or "").lower()
+    if host == "x.com":
+        return url.replace("://x.com", "://twitter.com", 1)
+    if host == "mobile.twitter.com":
+        return url.replace("://mobile.twitter.com", "://twitter.com", 1)
+    return url.strip()
+
+
 def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
     raw_formats = info.get("formats") or []
     items: list[FormatItem] = []
@@ -146,11 +157,21 @@ def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
         url = fmt.get("url")
         vcodec = fmt.get("vcodec")
         acodec = fmt.get("acodec")
-        has_video = vcodec and vcodec != "none"
-        has_audio = acodec and acodec != "none"
+        has_video = bool(vcodec and vcodec != "none")
+        has_audio = bool(acodec and acodec != "none")
 
-        if not url and not (has_video or has_audio):
+        if not url:
             continue
+
+        # Twitter/X often omits codec fields on progressive MP4 URLs.
+        if not has_video and not has_audio:
+            fid_l = fid.lower()
+            if "audio" in fid_l:
+                has_audio = True
+            elif fmt.get("height") or fmt.get("width") or "http" in fid_l:
+                has_video = True
+            else:
+                has_video = True
 
         mode: str
         video_url: Optional[str] = None
@@ -307,6 +328,12 @@ def _map_info_to_response(info: dict[str, Any], original_url: str) -> ExtractRes
             "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
         )
+    if "twitter" in extractor_lower:
+        headers.setdefault("Referer", "https://twitter.com/")
+        headers.setdefault("Origin", "https://twitter.com")
+
+    if not formats:
+        raise HTTPException(status_code=400, detail="no_formats")
 
     return ExtractResponse(
         status="success",
@@ -323,6 +350,7 @@ def _extract_sync(url: str) -> ExtractResponse:
     download_error = _ytdlp_download_error or Exception
     extractor_error = _ytdlp_extractor_error or Exception
 
+    url = _normalize_downloader_url(url)
     opts: dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
