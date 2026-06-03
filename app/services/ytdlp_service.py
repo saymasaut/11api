@@ -99,17 +99,85 @@ def _short_description(text: Optional[str], max_len: int = 280) -> Optional[str]
     return cleaned[: max_len - 1] + "…"
 
 
+_CONTAINER_DISPLAY: dict[str, str] = {
+    "m3u8": "M3U8",
+    "mpd": "DASH",
+    "mp4": "MP4",
+    "webm": "WEBM",
+    "mkv": "MKV",
+    "mov": "MOV",
+    "flv": "FLV",
+    "mpegts": "TS",
+    "ts": "TS",
+    "m4a": "M4A",
+    "mp3": "MP3",
+    "aac": "AAC",
+    "opus": "OPUS",
+}
+
+
+def _container_display_name(container: str) -> str:
+    key = container.lower().strip()
+    return _CONTAINER_DISPLAY.get(key, key.upper())
+
+
+def _container_from_url(url: str) -> Optional[str]:
+    if not url:
+        return None
+    lower = url.lower().split("?", 1)[0]
+    if ".m3u8" in lower or lower.endswith("m3u8"):
+        return "m3u8"
+    if ".mpd" in lower or lower.endswith("mpd"):
+        return "mpd"
+    for ext in ("webm", "mkv", "mp4", "mov", "flv", "m4a", "mp3"):
+        if f".{ext}" in lower:
+            return ext
+    if "/hls/" in lower or "playlist.m3u" in lower:
+        return "m3u8"
+    return None
+
+
+def _detect_container_ext(fmt: dict[str, Any]) -> str:
+    """Resolve real container; yt-dlp often reports ext=mp4 for HLS/DASH manifests."""
+    url = str(fmt.get("url") or "")
+    protocol = str(fmt.get("protocol") or "").lower()
+    ext = str(fmt.get("ext") or "").lower().strip()
+    container = str(fmt.get("container") or "").lower().strip()
+
+    from_url = _container_from_url(url)
+    if from_url:
+        return from_url
+
+    if container in _CONTAINER_DISPLAY:
+        return container
+
+    if "m3u8" in protocol:
+        return "m3u8"
+    if "dash" in protocol or "mpd" in protocol:
+        return "mpd"
+
+    if ext == "mpegts" and ("m3u8" in url.lower() or "m3u8" in protocol):
+        return "m3u8"
+    if ext in _CONTAINER_DISPLAY:
+        return ext
+    if ext:
+        return ext
+    return "mp4"
+
+
 def _format_label(fmt: dict[str, Any]) -> str:
     parts: list[str] = []
     height = fmt.get("height")
     if height:
         parts.append(f"{height}p")
-    ext = fmt.get("ext")
-    if ext:
-        parts.append(str(ext).upper())
+    container = _detect_container_ext(fmt)
+    parts.append(_container_display_name(container))
     note = fmt.get("format_note")
-    if note and str(note) not in parts:
-        parts.append(str(note))
+    if note:
+        note_s = str(note).strip()
+        upper_container = _container_display_name(container)
+        if note_s and note_s.upper() != upper_container and note_s not in parts:
+            parts.append(note_s)
     if not parts:
         fid = fmt.get("format_id")
         return str(fid) if fid else "Unknown"
@@ -123,7 +191,10 @@ def _pick_default_format(formats: list[FormatItem]) -> Optional[str]:
         if f.is_default:
             return f.format_id
     for f in formats:
-        if f.mode == "single" and f.ext in ("mp4", "mkv", "webm"):
+        if f.mode == "single" and (f.ext or "").lower() in ("mp4", "mkv", "webm"):
+            return f.format_id
+    for f in formats:
+        if f.mode == "single" and (f.ext or "").lower() not in ("m3u8", "mpd"):
             return f.format_id
     return formats[0].format_id
 
@@ -187,12 +258,13 @@ def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
         else:
             continue
 
+        container = _detect_container_ext(fmt)
         seen.add(fid)
         items.append(
             FormatItem(
                 format_id=fid,
                 label=_format_label(fmt),
-                ext=fmt.get("ext"),
+                ext=container,
                 resolution=(
                     f"{fmt.get('height')}p" if fmt.get("height") else None
                 ),
@@ -227,13 +299,32 @@ def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
         pair_id = f"{best_video.get('format_id')}+{best_audio.get('format_id')}"
         if pair_id not in seen:
             vh = best_video.get("height")
-            label = f"{vh}p · MP4 (merge)" if vh else "Best quality (merge)"
+            v_container = _detect_container_ext(best_video)
+            a_container = _detect_container_ext(best_audio)
+            # Merged output is MP4 unless both streams are already progressive files.
+            merge_out = "mp4"
+            if v_container == "m3u8" or a_container == "m3u8":
+                merge_label = (
+                    f"{_container_display_name(v_container)}+"
+                    f"{_container_display_name(a_container)} (merge → MP4)"
+                )
+            elif v_container == a_container:
+                merge_label = f"{_container_display_name(v_container)} (merge)"
+            else:
+                merge_label = (
+                    f"{_container_display_name(v_container)}+"
+                    f"{_container_display_name(a_container)} (merge)"
+                )
+            if vh:
+                label = f"{vh}p · {merge_label}"
+            else:
+                label = merge_label
             items.insert(
                 0,
                 FormatItem(
                     format_id=pair_id,
                     label=label,
-                    ext="mp4",
+                    ext=merge_out,
                     resolution=f"{vh}p" if vh else None,
                     filesize=None,
                     vcodec=best_video.get("vcodec"),
@@ -247,11 +338,19 @@ def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
             seen.add(pair_id)
 
     if items and not any(f.is_default for f in items):
-        # Prefer single-file MP4
+        # Prefer progressive MP4 over HLS/DASH manifests when both exist.
         for f in items:
             if f.mode == "single" and (f.ext or "").lower() == "mp4":
                 f.is_default = True
                 break
+        if not any(f.is_default for f in items):
+            for f in items:
+                if f.mode == "single" and (f.ext or "").lower() not in (
+                    "m3u8",
+                    "mpd",
+                ):
+                    f.is_default = True
+                    break
         if not any(f.is_default for f in items):
             items[0].is_default = True
 
