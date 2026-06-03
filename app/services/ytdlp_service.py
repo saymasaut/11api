@@ -332,6 +332,17 @@ def _map_info_to_response(info: dict[str, Any], original_url: str) -> ExtractRes
         headers.setdefault("Referer", "https://twitter.com/")
         headers.setdefault("Origin", "https://twitter.com")
 
+    # Generic sites: origin of the page URL helps many CDNs accept the download.
+    webpage = metadata.webpage_url or original_url
+    if webpage and "Referer" not in headers:
+        try:
+            parsed = urlparse(str(webpage))
+            if parsed.scheme and parsed.netloc:
+                origin = f"{parsed.scheme}://{parsed.netloc}"
+                headers.setdefault("Referer", f"{origin}/")
+        except Exception:
+            pass
+
     if not formats:
         raise HTTPException(status_code=400, detail="no_formats")
 
