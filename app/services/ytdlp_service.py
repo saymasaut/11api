@@ -438,6 +438,78 @@ def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
     return items
 
 
+def _fallback_formats_from_info(info: dict[str, Any]) -> list[FormatItem]:
+    """When format list is empty, use top-level url/manifest from yt-dlp info."""
+    candidates: list[str] = []
+    for key in ("url", "manifest_url", "webpage_url"):
+        raw = info.get(key)
+        if isinstance(raw, str) and raw.startswith("http"):
+            candidates.append(raw)
+    for fmt in info.get("formats") or []:
+        if isinstance(fmt, dict):
+            u = fmt.get("url")
+            if isinstance(u, str) and u.startswith("http"):
+                candidates.append(u)
+    seen: set[str] = set()
+    items: list[FormatItem] = []
+    for url in candidates:
+        if url in seen:
+            continue
+        seen.add(url)
+        ext = _container_from_url(url) or "mp4"
+        label = "HLS stream" if ext == "m3u8" else "Best available"
+        items.append(
+            FormatItem(
+                format_id=f"fallback_{len(items)}",
+                label=label,
+                ext=ext,
+                mode="single",
+                url=url,
+                is_default=len(items) == 0,
+            )
+        )
+        if len(items) >= 3:
+            break
+    return items
+
+
+def _build_ytdlp_opts(url: str, *, relaxed: bool = False) -> dict[str, Any]:
+    parsed = urlparse(url)
+    origin = ""
+    if parsed.scheme and parsed.netloc:
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+    http_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    if origin:
+        http_headers["Referer"] = f"{origin}/"
+        http_headers["Origin"] = origin
+
+    opts: dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "skip_download": True,
+        "geo_bypass": True,
+        "retries": 5,
+        "fragment_retries": 5,
+        "format": "bestvideo*+bestaudio/best/best",
+        "http_headers": http_headers,
+    }
+    if relaxed:
+        opts["nocheckcertificate"] = True
+        opts["format"] = "best/bestvideo+bestaudio/best"
+
+    cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "").strip()
+    if cookies_file and os.path.isfile(cookies_file):
+        opts["cookiefile"] = cookies_file
+    return opts
+
+
 def _map_info_to_response(info: dict[str, Any], original_url: str) -> ExtractResponse:
     extractor_key = info.get("extractor_key") or info.get("extractor")
     thumbs: list[str] = []
@@ -524,6 +596,8 @@ def _map_info_to_response(info: dict[str, Any], original_url: str) -> ExtractRes
             pass
 
     if not formats:
+        formats = _fallback_formats_from_info(info)
+    if not formats:
         raise HTTPException(status_code=400, detail="no_formats")
 
     return ExtractResponse(
@@ -536,68 +610,62 @@ def _map_info_to_response(info: dict[str, Any], original_url: str) -> ExtractRes
     )
 
 
-def _extract_sync(url: str) -> ExtractResponse:
-    ytdlp = _ensure_ytdlp()
+def _raise_from_ytdlp_error(url: str, e: BaseException) -> None:
     download_error = _ytdlp_download_error or Exception
     extractor_error = _ytdlp_extractor_error or Exception
-
-    url = _normalize_downloader_url(url)
-    opts: dict[str, Any] = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "skip_download": True,
-        "retries": 3,
-        "fragment_retries": 3,
-    }
-
-    cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "").strip()
-    if cookies_file and os.path.isfile(cookies_file):
-        opts["cookiefile"] = cookies_file
-
-    try:
-        with ytdlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-    except extractor_error as e:
-        msg = str(e).lower()
+    msg = str(e).lower()
+    if isinstance(e, extractor_error):
         if "private" in msg or "login" in msg or "sign in" in msg:
             raise HTTPException(status_code=403, detail="private_content") from e
         if "geo" in msg or "country" in msg or "blocked" in msg:
             raise HTTPException(status_code=451, detail="geo_blocked") from e
         if "429" in msg or "rate" in msg:
             raise HTTPException(status_code=429, detail="rate_limited") from e
-        logger.warning("yt-dlp extractor error for %s: %s", url, e)
-        raise HTTPException(
-            status_code=400,
-            detail=_sanitize_error_message(str(e)),
-        ) from e
-    except download_error as e:
-        msg = str(e).lower()
-        if "429" in msg or "rate" in msg:
-            raise HTTPException(status_code=429, detail="rate_limited") from e
-        logger.warning("yt-dlp download error for %s: %s", url, e)
-        raise HTTPException(
-            status_code=400,
-            detail=_sanitize_error_message(str(e)),
-        ) from e
-    except Exception as e:
-        logger.exception("yt-dlp extract failed for %s", url)
-        raise HTTPException(
-            status_code=500,
-            detail=_sanitize_error_message(str(e) or "extract_failed"),
-        ) from e
+    if isinstance(e, download_error) and ("429" in msg or "rate" in msg):
+        raise HTTPException(status_code=429, detail="rate_limited") from e
+    logger.warning("yt-dlp error for %s: %s", url, e)
+    raise HTTPException(
+        status_code=400,
+        detail=_sanitize_error_message(str(e)),
+    ) from e
 
+
+def _extract_info_once(ytdlp: ModuleType, url: str, opts: dict[str, Any]) -> dict[str, Any]:
+    with ytdlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
     if not info:
         raise HTTPException(status_code=400, detail="unsupported_url")
-
     if info.get("_type") == "playlist":
         entries = info.get("entries") or []
         first = next((e for e in entries if e), None)
         if not first:
             raise HTTPException(status_code=400, detail="unsupported_url")
         info = first
+    return info
 
-    return _map_info_to_response(info, url)
+
+def _extract_sync(url: str) -> ExtractResponse:
+    ytdlp = _ensure_ytdlp()
+    url = _normalize_downloader_url(url)
+    last_error: Optional[BaseException] = None
+
+    for relaxed in (False, True):
+        opts = _build_ytdlp_opts(url, relaxed=relaxed)
+        try:
+            info = _extract_info_once(ytdlp, url, opts)
+            return _map_info_to_response(info, url)
+        except HTTPException:
+            raise
+        except BaseException as e:
+            last_error = e
+            if not relaxed:
+                logger.info("yt-dlp retry with relaxed opts for %s", url)
+                continue
+            _raise_from_ytdlp_error(url, e)
+
+    if last_error is not None:
+        _raise_from_ytdlp_error(url, last_error)
+    raise HTTPException(status_code=400, detail="unsupported_url")
 
 
 async def extract_video(url: str) -> ExtractResponse:
