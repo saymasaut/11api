@@ -21,4 +21,7 @@ async def extract_endpoint(url: str = Query(..., description="Video page URL")):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail="unsupported_url") from e
+        detail = str(e).strip() or "extract_failed"
+        if len(detail) > 200:
+            detail = detail[:199] + "…"
+        raise HTTPException(status_code=500, detail=detail) from e

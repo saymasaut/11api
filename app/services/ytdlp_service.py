@@ -269,15 +269,29 @@ def _pick_default_format(formats: list[FormatItem]) -> Optional[str]:
     return formats[0].format_id
 
 
+def _sanitize_error_message(msg: str, max_len: int = 200) -> str:
+    cleaned = re.sub(r"\s+", " ", str(msg or "")).strip()
+    if len(cleaned) <= max_len:
+        return cleaned
+    return cleaned[: max_len - 1] + "…"
+
+
 def _normalize_downloader_url(url: str) -> str:
-    """x.com and twitter.com are equivalent for yt-dlp."""
-    parsed = urlparse(url.strip())
+    """Normalize hosts and short/share links for yt-dlp."""
+    raw = url.strip()
+    parsed = urlparse(raw)
     host = (parsed.hostname or "").lower()
     if host == "x.com":
-        return url.replace("://x.com", "://twitter.com", 1)
+        return raw.replace("://x.com", "://twitter.com", 1)
     if host == "mobile.twitter.com":
-        return url.replace("://mobile.twitter.com", "://twitter.com", 1)
-    return url.strip()
+        return raw.replace("://mobile.twitter.com", "://twitter.com", 1)
+    if host == "redd.it":
+        post_id = parsed.path.strip("/").split("/")[0]
+        if post_id:
+            return f"https://www.reddit.com/comments/{post_id}/"
+    if "reddit.com" in host and re.search(r"/s/[A-Za-z0-9]+", parsed.path):
+        return raw
+    return raw
 
 
 def _is_storyboard_format(fmt: dict[str, Any], fid: str) -> bool:
@@ -552,15 +566,26 @@ def _extract_sync(url: str) -> ExtractResponse:
             raise HTTPException(status_code=451, detail="geo_blocked") from e
         if "429" in msg or "rate" in msg:
             raise HTTPException(status_code=429, detail="rate_limited") from e
-        raise HTTPException(status_code=400, detail="unsupported_url") from e
+        logger.warning("yt-dlp extractor error for %s: %s", url, e)
+        raise HTTPException(
+            status_code=400,
+            detail=_sanitize_error_message(str(e)),
+        ) from e
     except download_error as e:
         msg = str(e).lower()
         if "429" in msg or "rate" in msg:
             raise HTTPException(status_code=429, detail="rate_limited") from e
-        raise HTTPException(status_code=400, detail="unsupported_url") from e
+        logger.warning("yt-dlp download error for %s: %s", url, e)
+        raise HTTPException(
+            status_code=400,
+            detail=_sanitize_error_message(str(e)),
+        ) from e
     except Exception as e:
         logger.exception("yt-dlp extract failed for %s", url)
-        raise HTTPException(status_code=500, detail="unsupported_url") from e
+        raise HTTPException(
+            status_code=500,
+            detail=_sanitize_error_message(str(e) or "extract_failed"),
+        ) from e
 
     if not info:
         raise HTTPException(status_code=400, detail="unsupported_url")
