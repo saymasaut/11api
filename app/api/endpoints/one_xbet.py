@@ -41,15 +41,13 @@ ONE_XBET_CACHE_KEY = "one_xbet:data:live"
 ONE_XBET_LAST_GOOD_CACHE_KEY = "one_xbet:data:live:last_good"
 ONE_XBET_PREMATCH_CACHE_KEY = "one_xbet:data:prematch"
 ONE_XBET_PREMATCH_LAST_GOOD_CACHE_KEY = "one_xbet:data:prematch:last_good"
-ONE_XBET_LIVE_REFRESH_SECONDS = 10
-ONE_XBET_LIVE_CACHE_TTL_SECONDS = 30
+ONE_XBET_LIVE_CACHE_TTL_SECONDS = 10
 ONE_XBET_LAST_GOOD_TTL_SECONDS = 60 * 60 * 24 * 7
 
 logger = logging.getLogger(__name__)
 
-_live_refresh_lock = asyncio.Lock()
+_live_fetch_lock = asyncio.Lock()
 _prematch_fetch_lock = asyncio.Lock()
-_live_refresh_task: asyncio.Task[None] | None = None
 
 _PLAIN_ALPHA = "aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ"
 _CODED_ALPHA = "fFgGjJkKaApPbBmMoOzZeEnNcCdDrRqQtTvVuUxXhHiIwWyYlLsS"
@@ -512,59 +510,34 @@ async def _store_live_feed_response(response: OneXbetDataResponse) -> None:
     )
 
 
-async def _refresh_live_feed() -> None:
-    async with _live_refresh_lock:
-        try:
-            payload = await _fetch_official_best_games(
-                ONE_XBET_OFFICIAL_LIVE_BEST_GAMES_URL
-            )
-            await _store_live_feed_response(OneXbetDataResponse(data=payload))
-        except Exception as exc:
-            logger.warning("1XBet live background refresh failed: %s", exc)
-
-
-async def _one_xbet_live_refresh_loop() -> None:
-    while True:
-        await asyncio.sleep(ONE_XBET_LIVE_REFRESH_SECONDS)
-        await _refresh_live_feed()
-
-
-async def start_one_xbet_live_refresh() -> None:
-    global _live_refresh_task
-    await _refresh_live_feed()
-    _live_refresh_task = asyncio.create_task(
-        _one_xbet_live_refresh_loop(),
-        name="one_xbet_live_refresh",
-    )
-
-
-async def stop_one_xbet_live_refresh() -> None:
-    global _live_refresh_task
-    if _live_refresh_task is None:
-        return
-    _live_refresh_task.cancel()
-    try:
-        await _live_refresh_task
-    except asyncio.CancelledError:
-        pass
-    _live_refresh_task = None
-
-
-async def _get_live_cached_response() -> OneXbetDataResponse:
+async def _get_live_response() -> OneXbetDataResponse:
     cached = await cache.get(ONE_XBET_CACHE_KEY)
     if cached:
         return OneXbetDataResponse.model_validate(cached)
 
-    last_good = await cache.get(ONE_XBET_LAST_GOOD_CACHE_KEY)
-    if last_good:
-        fallback = OneXbetDataResponse.model_validate(last_good)
-        fallback.status = "degraded-cache"
-        return fallback
+    async with _live_fetch_lock:
+        cached = await cache.get(ONE_XBET_CACHE_KEY)
+        if cached:
+            return OneXbetDataResponse.model_validate(cached)
 
-    return OneXbetDataResponse(
-        status="warming",
-        data=OneXbetDataPayload(events=[]),
-    )
+        try:
+            payload = await _fetch_official_best_games(
+                ONE_XBET_OFFICIAL_LIVE_BEST_GAMES_URL
+            )
+            response = OneXbetDataResponse(data=payload)
+            await _store_live_feed_response(response)
+            return response
+        except Exception as exc:
+            logger.warning("1XBet live on-demand fetch failed: %s", exc)
+            last_good = await cache.get(ONE_XBET_LAST_GOOD_CACHE_KEY)
+            if last_good:
+                fallback = OneXbetDataResponse.model_validate(last_good)
+                fallback.status = "degraded-cache"
+                return fallback
+            return OneXbetDataResponse(
+                status="degraded-empty",
+                data=OneXbetDataPayload(events=[]),
+            )
 
 
 async def _get_prematch_direct_response() -> OneXbetDataResponse:
@@ -742,7 +715,7 @@ async def _build_one_xbet_payload() -> OneXbetDataPayload:
 
 @router.get("/1xbet/live-data", response_model=OneXbetDataResponse, tags=["1XBet"])
 async def get_one_xbet_live_data() -> OneXbetDataResponse:
-    return await _get_live_cached_response()
+    return await _get_live_response()
 
 
 @router.get("/1xbet/prematch-data", response_model=OneXbetDataResponse, tags=["1XBet"])
