@@ -40,8 +40,9 @@ logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def _app_lifespan(app: FastAPI):
-    # Startup: intentionally empty — heavy startup can block first request under a2wsgi/cPanel.
+    await one_xbet.start_one_xbet_live_refresh()
     yield
+    await one_xbet.stop_one_xbet_live_refresh()
     # Shutdown: close pooled aiohttp session (avoids "Unclosed client session" on Uvicorn exit).
     await pool.close()
     await asyncio.sleep(0.25)
