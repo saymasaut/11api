@@ -254,18 +254,65 @@ def _merge_quality_label(best_video: dict[str, Any]) -> str:
     return "Best · MP4 (merge)"
 
 
+def _format_height(fmt: FormatItem) -> int:
+    res = fmt.resolution or ""
+    if res.endswith("p"):
+        try:
+            return int(res[:-1])
+        except ValueError:
+            pass
+    return 0
+
+
+def _is_audio_only_item(fmt: FormatItem) -> bool:
+    return fmt.mode == "audio_only"
+
+
+def _is_video_item(fmt: FormatItem) -> bool:
+    if fmt.mode == "separate":
+        return True
+    if fmt.mode == "audio_only":
+        return False
+    if fmt.mode != "single":
+        return False
+    if fmt.resolution or fmt.vcodec:
+        return True
+    fid = (fmt.format_id or "").lower()
+    return "audio" not in fid
+
+
 def _pick_default_format(formats: list[FormatItem]) -> Optional[str]:
     if not formats:
         return None
+
+    has_video = any(_is_video_item(f) for f in formats)
+
     for f in formats:
-        if f.is_default:
+        if f.is_default and (not has_video or _is_video_item(f)):
             return f.format_id
+
+    for f in formats:
+        if f.mode == "separate":
+            return f.format_id
+
     for f in formats:
         if f.mode == "single" and (f.ext or "").lower() in ("mp4", "mkv", "webm"):
             return f.format_id
+
+    if has_video:
+        video_items = [f for f in formats if _is_video_item(f) and f.mode == "single"]
+        if video_items:
+            best = max(video_items, key=_format_height)
+            return best.format_id
+
     for f in formats:
         if f.mode == "single" and (f.ext or "").lower() not in ("m3u8", "mpd"):
             return f.format_id
+
+    for f in formats:
+        if _is_video_item(f):
+            return f.format_id
+
     return formats[0].format_id
 
 
@@ -292,6 +339,29 @@ def _normalize_downloader_url(url: str) -> str:
     if "reddit.com" in host and re.search(r"/s/[A-Za-z0-9]+", parsed.path):
         return raw
     return raw
+
+
+def _is_split_hls_audio_fmt(fmt: dict[str, Any]) -> bool:
+    acodec = fmt.get("acodec")
+    if acodec and acodec != "none":
+        vcodec = fmt.get("vcodec")
+        if vcodec is None or vcodec == "none":
+            return True
+    fid = str(fmt.get("format_id") or "").lower()
+    url = str(fmt.get("url") or "").lower()
+    return "audio" in fid or "_audio.m3u8" in url
+
+
+def _is_split_hls_video_fmt(fmt: dict[str, Any]) -> bool:
+    vcodec = fmt.get("vcodec")
+    if vcodec and vcodec != "none":
+        acodec = fmt.get("acodec")
+        if acodec is None or acodec == "none":
+            return True
+    if fmt.get("height"):
+        return True
+    url = str(fmt.get("url") or "").lower()
+    return bool(re.search(r"_\d+w\.m3u8", url))
 
 
 def _is_storyboard_format(fmt: dict[str, Any], fid: str) -> bool:
@@ -377,19 +447,17 @@ def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
             )
         )
 
-    # Try combined bestvideo+bestaudio pair for high quality
+    # Try combined bestvideo+bestaudio pair for high quality (incl. split HLS)
     best_video = None
     best_audio = None
     for fmt in raw_formats:
         if not isinstance(fmt, dict) or not fmt.get("url"):
             continue
-        vcodec = fmt.get("vcodec")
-        acodec = fmt.get("acodec")
-        if vcodec and vcodec != "none" and (acodec is None or acodec == "none"):
+        if _is_split_hls_video_fmt(fmt):
             h = fmt.get("height") or 0
             if best_video is None or h > (best_video.get("height") or 0):
                 best_video = fmt
-        if acodec and acodec != "none" and (vcodec is None or vcodec == "none"):
+        if _is_split_hls_audio_fmt(fmt):
             abr = fmt.get("abr") or 0
             if best_audio is None or abr > (best_audio.get("abr") or 0):
                 best_audio = fmt
@@ -419,6 +487,7 @@ def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
             seen.add(pair_id)
 
     if items and not any(f.is_default for f in items):
+        has_video = any(_is_video_item(f) for f in items)
         # Prefer progressive MP4 over HLS/DASH manifests when both exist.
         for f in items:
             if f.mode == "single" and (f.ext or "").lower() == "mp4":
@@ -426,10 +495,26 @@ def _build_formats(info: dict[str, Any]) -> list[FormatItem]:
                 break
         if not any(f.is_default for f in items):
             for f in items:
+                if f.mode == "separate":
+                    f.is_default = True
+                    break
+        if not any(f.is_default for f in items) and has_video:
+            video_singles = [
+                f for f in items if f.mode == "single" and _is_video_item(f)
+            ]
+            if video_singles:
+                max(video_singles, key=_format_height).is_default = True
+        if not any(f.is_default for f in items):
+            for f in items:
                 if f.mode == "single" and (f.ext or "").lower() not in (
                     "m3u8",
                     "mpd",
                 ):
+                    f.is_default = True
+                    break
+        if not any(f.is_default for f in items):
+            for f in items:
+                if _is_video_item(f):
                     f.is_default = True
                     break
         if not any(f.is_default for f in items):
@@ -583,6 +668,14 @@ def _map_info_to_response(info: dict[str, Any], original_url: str) -> ExtractRes
     if "twitter" in extractor_lower:
         headers.setdefault("Referer", "https://twitter.com/")
         headers.setdefault("Origin", "https://twitter.com")
+    if "pinterest" in extractor_lower:
+        headers.setdefault("Referer", "https://www.pinterest.com/")
+        headers.setdefault("Origin", "https://www.pinterest.com")
+        headers.setdefault(
+            "User-Agent",
+            "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+        )
 
     # Generic sites: origin of the page URL helps many CDNs accept the download.
     webpage = metadata.webpage_url or original_url
