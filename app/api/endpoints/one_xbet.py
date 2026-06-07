@@ -41,7 +41,7 @@ ONE_XBET_CACHE_KEY = "one_xbet:data:live"
 ONE_XBET_LAST_GOOD_CACHE_KEY = "one_xbet:data:live:last_good"
 ONE_XBET_PREMATCH_CACHE_KEY = "one_xbet:data:prematch"
 ONE_XBET_PREMATCH_LAST_GOOD_CACHE_KEY = "one_xbet:data:prematch:last_good"
-ONE_XBET_LIVE_CACHE_TTL_SECONDS = 10
+ONE_XBET_FEED_CACHE_TTL_SECONDS = 10
 ONE_XBET_LAST_GOOD_TTL_SECONDS = 60 * 60 * 24 * 7
 
 logger = logging.getLogger(__name__)
@@ -501,7 +501,7 @@ async def _store_live_feed_response(response: OneXbetDataResponse) -> None:
     await cache.set(
         ONE_XBET_CACHE_KEY,
         dumped,
-        ttl_seconds=ONE_XBET_LIVE_CACHE_TTL_SECONDS,
+        ttl_seconds=ONE_XBET_FEED_CACHE_TTL_SECONDS,
     )
     await cache.set(
         ONE_XBET_LAST_GOOD_CACHE_KEY,
@@ -540,22 +540,39 @@ async def _get_live_response() -> OneXbetDataResponse:
             )
 
 
-async def _get_prematch_direct_response() -> OneXbetDataResponse:
+async def _store_prematch_feed_response(response: OneXbetDataResponse) -> None:
+    dumped = response.model_dump()
+    await cache.set(
+        ONE_XBET_PREMATCH_CACHE_KEY,
+        dumped,
+        ttl_seconds=ONE_XBET_FEED_CACHE_TTL_SECONDS,
+    )
+    await cache.set(
+        ONE_XBET_PREMATCH_LAST_GOOD_CACHE_KEY,
+        dumped,
+        ttl_seconds=ONE_XBET_LAST_GOOD_TTL_SECONDS,
+    )
+
+
+async def _get_prematch_response() -> OneXbetDataResponse:
+    cached = await cache.get(ONE_XBET_PREMATCH_CACHE_KEY)
+    if cached:
+        return OneXbetDataResponse.model_validate(cached)
+
     async with _prematch_fetch_lock:
+        cached = await cache.get(ONE_XBET_PREMATCH_CACHE_KEY)
+        if cached:
+            return OneXbetDataResponse.model_validate(cached)
+
         try:
             payload = await _fetch_official_best_games(
                 ONE_XBET_OFFICIAL_PREMATCH_BEST_GAMES_URL
             )
             response = OneXbetDataResponse(data=payload)
-            dumped = response.model_dump()
-            await cache.set(
-                ONE_XBET_PREMATCH_LAST_GOOD_CACHE_KEY,
-                dumped,
-                ttl_seconds=ONE_XBET_LAST_GOOD_TTL_SECONDS,
-            )
+            await _store_prematch_feed_response(response)
             return response
         except Exception as exc:
-            logger.warning("1XBet prematch direct fetch failed: %s", exc)
+            logger.warning("1XBet prematch on-demand fetch failed: %s", exc)
             last_good = await cache.get(ONE_XBET_PREMATCH_LAST_GOOD_CACHE_KEY)
             if last_good:
                 fallback = OneXbetDataResponse.model_validate(last_good)
@@ -720,7 +737,7 @@ async def get_one_xbet_live_data() -> OneXbetDataResponse:
 
 @router.get("/1xbet/prematch-data", response_model=OneXbetDataResponse, tags=["1XBet"])
 async def get_one_xbet_prematch_data() -> OneXbetDataResponse:
-    return await _get_prematch_direct_response()
+    return await _get_prematch_response()
 
 
 async def _get_cached_or_build_payload() -> OneXbetDataPayload:
